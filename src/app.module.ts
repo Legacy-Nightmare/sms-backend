@@ -14,10 +14,12 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
 import { WebsiteModule } from './website/website.module';
+import { StorageModule } from './platform/storage/storage.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    StorageModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -28,6 +30,13 @@ import { WebsiteModule } from './website/website.module';
         username: config.get<string>('DB_USERNAME', 'postgres'),
         password: config.get<string>('DB_PASSWORD', 'postgres'),
         database: config.get<string>('DB_DATABASE', 'school_management'),
+        // Hosted Postgres providers outside the backend's own network (Neon,
+        // Supabase) require SSL; Render's own Postgres over its internal
+        // network, and local Docker, don't. Toggle with DB_SSL=true rather
+        // than hardcoding, since the same codebase targets both.
+        ssl: config.get<string>('DB_SSL', 'false') === 'true'
+          ? { rejectUnauthorized: false }
+          : false,
         autoLoadEntities: true,
         synchronize: false,
         migrations: [__dirname + '/migrations/*{.ts,.js}'],
