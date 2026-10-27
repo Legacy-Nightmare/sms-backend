@@ -1,0 +1,184 @@
+name: Backend CI/CD
+
+on:
+  push:
+    branches: [aphsmsp-stg]
+  pull_request:
+    branches: [aphsmsp-stg]
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: school_management
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d school_management"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PORT: 8082
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: school_management
+      DB_SSL: 'false'
+      JWT_SECRET: ci-test-secret
+      JWT_EXPIRES_IN: 1h
+      # Dummy S3-compatible values — StorageService constructs its S3 client
+      # eagerly at module init, so these just need to be syntactically valid,
+      # not real; nothing in the test suite actually calls Supabase.
+      SUPABASE_S3_ENDPOINT: http://localhost:54321/storage/v1/s3
+      SUPABASE_S3_REGION: us-east-1
+      SUPABASE_S3_ACCESS_KEY_ID: test
+      SUPABASE_S3_SECRET_ACCESS_KEY: test
+      SUPABASE_STORAGE_BUCKET: test-bucket
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Run migrations against the test database
+        run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:stg
+            ${{ steps.image.outputs.name }}:stg-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync deploy config to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.STG_EC2_HOST }}
+          username: ${{ secrets.STG_EC2_SSH_USER }}
+          key: ${{ secrets.STG_EC2_SSH_KEY }}
+          source: 'deploy/docker-compose.yml,deploy/nginx.conf,deploy/minio-policy.json'
+          target: '/opt/sms'
+          strip_components: 1
+
+      - name: Deploy backend container
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_ACTOR: ${{ github.actor }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          EC2_HOST: ${{ secrets.STG_EC2_HOST }}
+          DB_USERNAME: ${{ secrets.STG_DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.STG_DB_PASSWORD }}
+          DB_DATABASE: ${{ secrets.STG_DB_DATABASE }}
+          JWT_SECRET: ${{ secrets.STG_JWT_SECRET }}
+          JWT_EXPIRES_IN: ${{ secrets.STG_JWT_EXPIRES_IN }}
+          SMTP_HOST: ${{ secrets.STG_SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.STG_SMTP_PORT }}
+          SMTP_USER: ${{ secrets.STG_SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.STG_SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.STG_SMTP_FROM }}
+          # MinIO stands in for Supabase Storage on staging (no Supabase
+          # project here) — same StorageService code, different provider.
+          # See deploy/docker-compose.yml for how these map to the app's
+          # SUPABASE_S3_* env vars.
+          MINIO_ROOT_USER: ${{ secrets.STG_MINIO_ROOT_USER }}
+          MINIO_ROOT_PASSWORD: ${{ secrets.STG_MINIO_ROOT_PASSWORD }}
+        with:
+          host: ${{ secrets.STG_EC2_HOST }}
+          username: ${{ secrets.STG_EC2_SSH_USER }}
+          key: ${{ secrets.STG_EC2_SSH_KEY }}
+          envs: GHCR_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD
+          script: |
+            set -e
+            cd /opt/sms
+
+            cat > .env <<EOF
+            DB_USERNAME=$DB_USERNAME
+            DB_PASSWORD=$DB_PASSWORD
+            DB_DATABASE=$DB_DATABASE
+            JWT_SECRET=$JWT_SECRET
+            JWT_EXPIRES_IN=$JWT_EXPIRES_IN
+            SMTP_HOST=$SMTP_HOST
+            SMTP_PORT=$SMTP_PORT
+            SMTP_USER=$SMTP_USER
+            SMTP_PASSWORD=$SMTP_PASSWORD
+            SMTP_FROM=$SMTP_FROM
+            MINIO_ROOT_USER=$MINIO_ROOT_USER
+            MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+            SUPABASE_S3_ACCESS_KEY_ID=$MINIO_ROOT_USER
+            SUPABASE_S3_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
+            EOF
+            chmod 600 .env
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+
+            export BACKEND_IMAGE="$IMAGE:stg"
+            export STORAGE_PUBLIC_URL_BASE="http://$EC2_HOST/storage"
+            docker compose pull postgres minio backend
+            docker compose up -d --wait postgres minio
+            docker compose run --rm backend node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
+            docker compose up -d --wait backend
+            docker compose up -d nginx
+            docker image prune -f

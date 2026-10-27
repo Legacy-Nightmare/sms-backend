@@ -7,6 +7,14 @@ import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client
 // Supabase's endpoint/region/credentials instead of AWS. Chosen over
 // Cloudflare R2 specifically because Supabase's free tier doesn't require a
 // card on file; R2 does, even at $0 usage.
+//
+// Staging (no Supabase project) points this same S3 client at a self-hosted
+// MinIO container instead — same AWS SDK, same env var names. The one thing
+// that differs per-provider is the public read URL shape: Supabase serves
+// reads from its own REST API under "/object/public/<bucket>", while MinIO
+// (and most other S3-compatible stores) just serves "/<bucket>" directly at
+// the S3 endpoint itself. STORAGE_PUBLIC_URL_BASE lets staging opt into the
+// plain shape without touching the Supabase-shaped default prod relies on.
 @Injectable()
 export class StorageService {
   private readonly client: S3Client;
@@ -22,9 +30,13 @@ export class StorageService {
     const s3Endpoint = this.config.get<string>('SUPABASE_S3_ENDPOINT', '').replace(/\/$/, '');
     const region = this.config.get<string>('SUPABASE_S3_REGION', 'us-east-1');
     this.bucket = this.config.get<string>('SUPABASE_STORAGE_BUCKET', '');
-    // The public object-read REST API lives on the same host as the S3
-    // endpoint, just under /object/public/<bucket> instead of /s3.
-    this.publicUrl = `${s3Endpoint.replace(/\/s3$/, '')}/object/public/${this.bucket}`;
+
+    const publicUrlBase = this.config.get<string>('STORAGE_PUBLIC_URL_BASE', '').replace(/\/$/, '');
+    this.publicUrl = publicUrlBase
+      ? `${publicUrlBase}/${this.bucket}`
+      : // The public object-read REST API lives on the same host as the S3
+        // endpoint, just under /object/public/<bucket> instead of /s3.
+        `${s3Endpoint.replace(/\/s3$/, '')}/object/public/${this.bucket}`;
 
     this.client = new S3Client({
       region,

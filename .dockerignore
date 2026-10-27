@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+uploads
+.git
+.github
+.env
+*.log
+.DS_Store
+deploy
+test
+README.md
+CLAUDE.md

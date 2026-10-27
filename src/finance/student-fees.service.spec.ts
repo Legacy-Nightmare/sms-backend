@@ -2,7 +2,6 @@ import { BadRequestException } from '@nestjs/common';
 import { StudentFeesService } from './student-fees.service';
 import { StudentFee } from './entities/student-fee.entity';
 import { Payment } from './entities/payment.entity';
-import { RecordStatus } from './entities/enums';
 
 function makeQueryBuilder(result: unknown) {
   const qb: Record<string, jest.Mock> = {
@@ -31,14 +30,21 @@ describe('StudentFeesService.recordPayment', () => {
     manager = {
       findOne: jest.fn(),
       createQueryBuilder: jest.fn(),
-      save: jest.fn((_entity, obj) => Promise.resolve(obj.id ? obj : { ...obj, id: 42 })),
+      save: jest.fn((_entity, obj) =>
+        Promise.resolve(obj.id ? obj : { ...obj, id: 42 }),
+      ),
       create: jest.fn((_entity, obj) => obj),
       transaction: jest.fn((cb) => cb(manager)),
     };
 
     const studentFeesRepo = { manager } as never;
     const paymentsRepo = {} as never;
-    service = new StudentFeesService(studentFeesRepo, paymentsRepo, {} as never, {} as never);
+    service = new StudentFeesService(
+      studentFeesRepo,
+      paymentsRepo,
+      {} as never,
+      {} as never,
+    );
   });
 
   it('rejects a payment larger than the remaining due (no advance payments)', async () => {
@@ -47,7 +53,11 @@ describe('StudentFeesService.recordPayment', () => {
       .mockReturnValueOnce(makeQueryBuilder({ sum: '400' })); // sum of existing active payments
 
     await expect(
-      service.recordPayment(1, { amount: 700, paidAt: '2026-10-01' } as never, 9),
+      service.recordPayment(
+        1,
+        { amount: 700, paidAt: '2026-10-01' } as never,
+        9,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(manager.save).not.toHaveBeenCalled();
@@ -86,7 +96,11 @@ describe('StudentFeesService.recordPayment', () => {
   });
 
   it('replays an existing payment instead of double-recording on a repeated idempotency key', async () => {
-    const existing = { id: 55, amount: 300, idempotencyKey: 'key-abc' } as Payment;
+    const existing = {
+      id: 55,
+      amount: 300,
+      idempotencyKey: 'key-abc',
+    } as Payment;
     manager.findOne.mockResolvedValueOnce(existing);
 
     const result = await service.recordPayment(
