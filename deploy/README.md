@@ -2,28 +2,11 @@
 
 This document explains how to set up the SMS application on a new Ubuntu EC2/VPS server, configure GitHub Actions CI/CD, manage persistent data, create backups, and migrate staging data to a client's production VPS.
 
+The deployment uses Docker Compose, PostgreSQL, RustFS (S3-compatible object storage), the backend, the frontend, and Nginx.
+
+> **Important:** This runbook uses RustFS, not MinIO. The RustFS backup and restore scripts must match the RustFS Compose service and container names. Always test restoration on a non-production server before migrating real client data.
+
 ---
-
-## 1. Architecture Overview
-
-```text
-                         Users
-                           |
-                           v
-                    EC2 / VPS :80
-                           |
-                           v
-                         Nginx
-                     /     |      \
-                    /      |       \
-                   v       v        v
-              Frontend   Backend   RustFS
-                :3000     :8082    :9000
-                            |          |
-                            v          v
-                       PostgreSQL   Object files
-                         :5432      sms-uploads
-```
 
 ## 1. Architecture
 
@@ -108,7 +91,7 @@ Connect to the server:
 ssh -i /path/to/key.pem ubuntu@YOUR_EC2_PUBLIC_IP
 ```
 
-Use the actual SSH username and key for your instance. Some AMIs use a different username.
+Replace the username and key path with the actual values for the instance.
 
 Update Ubuntu:
 
@@ -122,38 +105,33 @@ sudo apt install -y ca-certificates curl git
 
 ## 4. Install Docker
 
-Install Docker Engine and the Docker Compose plugin using the official Docker instructions for Ubuntu:
+Follow the official installation instructions:
 
-https://docs.docker.com/engine/install/ubuntu/
+- Docker Engine: https://docs.docker.com/engine/install/ubuntu/
+- Rootless Docker: https://docs.docker.com/engine/security/rootless/
+- Docker Compose: https://docs.docker.com/compose/
 
 Verify the installation:
 
 ```bash
 docker --version
 docker compose version
-```
-
-### Rootless Docker note
-
-The current staging setup uses Rootless Docker. Run Docker commands as the account that owns the Rootless Docker daemon. Do not randomly switch between `docker` and `sudo docker`; those can use different Docker daemons and different volumes.
-
-Verify which daemon is being used:
-
-```bash
 docker info
 docker context show
 docker volume ls
 ```
 
-If this is a fresh server, configure and start Rootless Docker according to the official instructions:
+### Rootless Docker
 
-https://docs.docker.com/engine/security/rootless/
+The existing staging server uses Rootless Docker. Run Docker commands as the account that owns the Rootless Docker daemon.
 
-Make sure the Docker daemon starts after a server reboot. Follow the official Rootless Docker systemd/user-service instructions for the chosen account.
+Do not switch between `docker` and `sudo docker` without understanding which daemon each command uses. They may access different containers, networks, and volumes.
 
-### Allowing host port 80 with Rootless Docker
+Configure Rootless Docker to start correctly after reboot, following the official Docker instructions.
 
-The existing staging setup has used this sysctl setting:
+### Rootless Docker and port 80
+
+The current staging setup used this sysctl setting to allow Rootless Docker to bind port 80:
 
 ```bash
 sudo tee /etc/sysctl.d/99-rootless-ports.conf <<'EOF'
@@ -163,21 +141,19 @@ EOF
 sudo sysctl --system
 ```
 
-This permits unprivileged processes to bind ports starting at 80. Review this security trade-off before applying it to a new production server.
-
-An alternative is to keep the application on a high port such as `8080` and use a host-level reverse proxy for public ports `80` and `443`.
+Review the security implications before using this on another server. An alternative is to use a high port for the application and a host-level reverse proxy for public ports 80 and 443.
 
 ---
 
-## 5. Prepare the Application Directory
+## 5. Prepare `/opt/sms`
 
-The deployment workflows currently expect the application stack under:
+The existing deployment expects the shared Compose stack under:
 
 ```text
 /opt/sms
 ```
 
-Create the directory and assign it to the account that runs Rootless Docker and deployment commands.
+Create the directory:
 
 ```bash
 sudo mkdir -p /opt/sms
@@ -185,9 +161,9 @@ sudo chown -R "$USER":"$(id -gn)" /opt/sms
 cd /opt/sms
 ```
 
-**Important:** The backend deployment workflow is expected to copy its deployment files into this directory. Confirm that the workflow uses the same path before running the first deployment.
+The backend deployment workflow is expected to copy the deployment files into this directory. Confirm the workflow uses this exact path.
 
-Expected files:
+Expected files on the server:
 
 ```text
 /opt/sms/
@@ -197,7 +173,23 @@ Expected files:
 └── backups/
 ```
 
-Do not commit `.env`, private keys, database passwords, JWT secrets, or storage credentials to Git.
+The repository's deployment files are expected under:
+
+```text
+sms-backend/deploy/
+├── docker-compose.yml
+├── nginx.conf
+├── README.md
+├── pg-backup.sh
+├── pg-restore.sh
+├── rustfs-backup.sh
+├── rustfs-restore.sh
+└── rustfs-policy.json
+```
+
+Only include script names that actually exist in the branch being deployed.
+
+Do not commit `.env`, database passwords, JWT secrets, storage secrets, or private SSH keys to Git.
 
 ---
 
@@ -205,49 +197,49 @@ Do not commit `.env`, private keys, database passwords, JWT secrets, or storage 
 
 Open each repository:
 
-**GitHub → Repository → Settings → Secrets and variables → Actions**
+**GitHub → Settings → Secrets and variables → Actions**
 
-Create the secrets required by that repository's actual workflow.
+Use the exact secret names referenced in the workflow files. GitHub secret names are case-sensitive.
 
 ### Shared staging deployment secrets
 
 | Secret | Purpose |
 |---|---|
-| `STG_EC2_HOST` | Staging server public IP or hostname |
-| `STG_EC2_SSH_USER` | SSH account used by the deployment workflow |
-| `STG_EC2_SSH_KEY` | Private SSH key used by GitHub Actions |
+| `STG_EC2_HOST` | Staging EC2 public IP or hostname |
+| `STG_EC2_SSH_USER` | SSH deployment username |
+| `STG_EC2_SSH_KEY` | Private SSH key content |
 
-Use the private key content expected by the SSH action. Do not upload the `.pem` file to the repository.
+The private key must correspond to the selected SSH account and have permission to run the deployment commands.
 
-### Frontend workflow secrets
+### Frontend image-pull secrets
 
 The current frontend workflow uses:
 
 | Secret | Purpose |
 |---|---|
-| `STG_GHCR_USERNAME` | GitHub username that can read the private package |
-| `STG_GHCR_READ_TOKEN` | Token with permission to read the required GHCR package |
+| `STG_GHCR_USERNAME` | GitHub username authorized to read the package |
+| `STG_GHCR_READ_TOKEN` | Token with permission to pull the private GHCR image |
 
-The username must not be blank. The token must be authorized to access the private image package.
+Ensure `STG_GHCR_USERNAME` is not blank and the token can read the required package.
 
-The frontend image name currently used by the setup is:
+Current frontend image:
 
 ```text
-ghcr.io/legacy-nightmare/sms-frontend
+ghcr.io/legacy-nightmare/sms-frontend:stg
 ```
 
-Confirm this matches `.github/workflows/frontend.yml`.
+Verify the actual image name in `.github/workflows/frontend.yml`.
 
-### Backend application secrets
+### Backend secrets
 
-The older setup documentation lists these backend secrets:
+The older deployment documentation listed these secrets:
 
 - `STG_DB_USERNAME`
 - `STG_DB_PASSWORD`
 - `STG_DB_DATABASE`
 - `STG_JWT_SECRET`
 - `STG_JWT_EXPIRES_IN`
-- SMTP-related secrets required by the application
+- SMTP-related secrets used by the backend
 
 Old documentation also referenced `STG_MINIO_ROOT_USER` and `STG_MINIO_ROOT_PASSWORD`. These names are MinIO-specific and must not be assumed to match the current RustFS configuration.
 
@@ -335,12 +327,6 @@ Resolve missing environment variables and configuration errors before starting t
 Avoid publishing the output of `docker compose config`, because resolved configuration may contain secrets.
 
 ### Step 4 — Start services
-
-Avoid sharing the output of `docker compose config` publicly because resolved configuration can contain secrets.
-
-### Step 4 — Start the stack
-
-Only do this after verifying the Compose file and `.env`:
 
 ```bash
 docker compose up -d
@@ -443,9 +429,13 @@ Verify:
 - [ ] Email works, if applicable.
 - [ ] Data persists after restarting services.
 
-## 9. Verify Staging
+Use the health endpoint documented by the actual backend; do not assume an endpoint exists without checking the application.
 
-Run:
+### RustFS console
+
+The current Compose setup binds the console to `127.0.0.1:9001`.
+
+To access it through SSH tunneling:
 
 ```bash
 ssh -i /path/to/key.pem \
@@ -474,34 +464,6 @@ When code is pushed to the configured staging branch:
 5. Logs and service status are checked.
 
 Useful commands:
-
-```bash
-ssh -i /path/to/key.pem \
-  -L 9001:127.0.0.1:9001 \
-  ubuntu@YOUR_EC2_PUBLIC_IP
-```
-
-Then open:
-
-```text
-http://localhost:9001
-```
-
-Use the actual SSH username and key. Do not expose the console publicly just to make it easier to access.
-
----
-
-## 10. Routine Deployment
-
-When a developer pushes to the configured staging branch:
-
-1. GitHub Actions runs the configured workflow.
-2. The workflow builds and publishes the relevant image.
-3. The server pulls the image.
-4. The relevant application service is recreated.
-5. The deployment is checked through service status and logs.
-
-For manual inspection:
 
 ```bash
 cd /opt/sms
@@ -938,4 +900,3 @@ Do not delete persistent volumes to reclaim disk space. Identify old images and 
 **Staging deployment updates application code. Production migration transfers application code, database data, object storage, configuration, and validated backups.**
 
 Never consider the migration complete until the restored database and uploaded objects have been tested together on production.
-
