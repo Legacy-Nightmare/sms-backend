@@ -56,12 +56,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
       - name: Lint
         run: npm run lint
@@ -79,7 +81,7 @@ jobs:
         run: npm run test:e2e
 
   build:
-    name: Build and publish image
+    name: Build and publish backend image
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -94,14 +96,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Define image
+      - name: Define image tag
         id: meta
         shell: bash
         run: |
           REPO="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           echo "image=ghcr.io/${REPO}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -129,7 +132,6 @@ jobs:
 
     permissions:
       contents: read
-      packages: read
 
     steps:
       - uses: actions/checkout@v4
@@ -144,10 +146,10 @@ jobs:
           target: "/opt/sms"
           strip_components: 1
 
-      - name: Deploy
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.2.0
         env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_READ_TOKEN: ${{ secrets.STG_GHCR_READ_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}
           IMAGE: ${{ needs.build.outputs.image }}
           EC2_HOST: ${{ secrets.STG_EC2_HOST }}
@@ -173,12 +175,13 @@ jobs:
           username: ${{ secrets.STG_EC2_SSH_USER }}
           key: ${{ secrets.STG_EC2_SSH_KEY }}
 
-          envs: GHCR_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
+          envs: GHCR_READ_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
 
           script: |
             set -eu
             cd /opt/sms
 
+            test -n "$GHCR_READ_TOKEN"
             test -n "$IMAGE"
             test -n "$RUSTFS_ACCESS_KEY"
             test -n "$RUSTFS_SECRET_KEY"
@@ -202,36 +205,36 @@ jobs:
             EOF
             chmod 600 .env
 
-            echo "$GHCR_TOKEN" | docker login ghcr.io \
+            echo "$GHCR_READ_TOKEN" | docker login ghcr.io \
               -u "$GHCR_ACTOR" --password-stdin
 
             export BACKEND_IMAGE="$IMAGE"
 
-            # Validate Compose before changing running services.
+            # Validate configuration before rollout.
             docker compose config --quiet
 
-            # Pull all required images before rollout.
+            # Pull all required images first.
             docker compose pull postgres rustfs backend frontend nginx
 
             # Start infrastructure and wait for readiness.
             docker compose up -d --wait postgres rustfs
 
-            # Ensure the bucket exists before backend startup.
+            # Create/check the storage bucket.
             docker compose run --rm storage-init
 
-            # Run migrations. Keep migrations backward-compatible.
+            # Run database migrations.
             docker compose run --rm backend \
               node ./node_modules/typeorm/cli.js \
               migration:run -d dist/data-source.js
 
-            # Start application services.
+            # Roll out application services.
             docker compose up -d --wait backend frontend nginx
 
-            # Persist the deployed image reference for recovery.
+            # Record deployed backend image for recovery reference.
             printf '%s\n' "$IMAGE" > .deployed-backend-image
             chmod 600 .deployed-backend-image
 
-            # Keep cleanup conservative.
+            # Conservative cleanup.
             docker image prune -f
 
-            echo "Staging deployment completed: $IMAGE"
+            echo "Staging deployment completed."
