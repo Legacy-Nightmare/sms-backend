@@ -1,4 +1,3 @@
-
 name: Backend CI/CD
 
 on:
@@ -47,6 +46,7 @@ jobs:
       DB_PASSWORD: postgres
       DB_DATABASE: school_management
       DB_SSL: "false"
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/school_management
       JWT_SECRET: ci-test-secret
       JWT_EXPIRES_IN: 1h
       S3_ENDPOINT: http://localhost:9000
@@ -67,7 +67,10 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
-      - run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
+
+      - name: Run database migrations
+        run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
+
       - run: npm run test:e2e
 
   build:
@@ -160,14 +163,21 @@ jobs:
 
             test -n "$GHCR_READ_TOKEN"
             test -n "$IMAGE"
+            test -n "$DB_USERNAME"
+            test -n "$DB_PASSWORD"
+            test -n "$DB_DATABASE"
             test -n "$RUSTFS_ACCESS_KEY"
             test -n "$RUSTFS_SECRET_KEY"
 
             umask 077
             cat > .env <<EOF
+            DB_HOST=postgres
+            DB_PORT=5432
+            DB_SSL=false
             DB_USERNAME=$DB_USERNAME
             DB_PASSWORD=$DB_PASSWORD
             DB_DATABASE=$DB_DATABASE
+            DATABASE_URL=postgres://$DB_USERNAME:$DB_PASSWORD@postgres:5432/$DB_DATABASE
             JWT_SECRET=$JWT_SECRET
             JWT_EXPIRES_IN=$JWT_EXPIRES_IN
             SMTP_HOST=$SMTP_HOST
@@ -179,21 +189,28 @@ jobs:
             RUSTFS_SECRET_KEY=$RUSTFS_SECRET_KEY
             STORAGE_BUCKET=sms-uploads
             STORAGE_PUBLIC_URL_BASE=
+            S3_REGION=us-east-1
             EOF
             chmod 600 .env
 
             echo "$GHCR_READ_TOKEN" | docker login ghcr.io \
               -u "$GHCR_ACTOR" --password-stdin
 
-            export BACKEND_IMAGE="$IMAGE"
+            export IMAGE="$IMAGE"
 
             docker compose config --quiet
             docker compose pull postgres rustfs backend nginx
 
             docker compose up -d --wait postgres rustfs
 
-            docker compose run --rm --no-deps backend \
-              node ./node_modules/typeorm/cli.js \
+            docker compose run --rm --no-deps \
+              -e DATABASE_URL="postgres://$DB_USERNAME:$DB_PASSWORD@postgres:5432/$DB_DATABASE" \
+              -e DB_HOST=postgres \
+              -e DB_PORT=5432 \
+              -e DB_USERNAME="$DB_USERNAME" \
+              -e DB_PASSWORD="$DB_PASSWORD" \
+              -e DB_DATABASE="$DB_DATABASE" \
+              backend node ./node_modules/typeorm/cli.js \
               migration:run -d dist/data-source.js
 
             docker compose up -d --wait backend nginx
