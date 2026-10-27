@@ -1,10 +1,6 @@
-# SMS Application — EC2 Staging, CI/CD, Backup & Production Migration
+# SMS Backend — EC2 Staging Deployment & Production Migration
 
-> **Purpose:** Ei document follow kore notun developer Ubuntu EC2 server setup korte parbe, GitHub Actions diye staging deploy korte parbe, data backup nite parbe, ebong staging-er database o uploaded files client-er production VPS-e migrate korte parbe.
->
-> **Current architecture:** Docker Compose + PostgreSQL 16 + RustFS (S3-compatible object storage) + Backend + Frontend + Nginx.
->
-> **Important:** Ei project-er current server-e RustFS use hocche. Purono MinIO-specific instruction/script verify na kore use kora jabe na.
+This document explains how to set up the SMS application on a new Ubuntu EC2/VPS server, configure GitHub Actions CI/CD, manage persistent data, create backups, and migrate staging data to a client's production VPS.
 
 ---
 
@@ -29,78 +25,82 @@
                          :5432      sms-uploads
 ```
 
-### Docker Compose services
+## 1. Architecture
 
-| Service | Purpose | Port |
+```text
+Users
+  |
+  v
+Public EC2/VPS :80
+  |
+  v
+Nginx
+  |-------------------|-------------------|
+  v                   v                   v
+Frontend :3000     Backend :8082      RustFS :9000
+                       |                   |
+                       v                   v
+                  PostgreSQL          Object storage
+                    :5432              sms-uploads
+```
+
+### Services
+
+| Service | Purpose | Exposure |
 |---|---|---|
-| `nginx` | Public HTTP reverse proxy | Host port `80` |
-| `frontend` | Web application | Internal `3000` |
-| `backend` | API server | Internal `8082` |
-| `postgres` | Application database | Internal `5432` |
-| `rustfs` | S3-compatible file storage | Internal `9000` |
-| RustFS console | Storage administration | Host `127.0.0.1:9001` only |
+| `nginx` | Reverse proxy | Public port 80 |
+| `frontend` | Web application | Internal port 3000 |
+| `backend` | API and application logic | Internal port 8082 |
+| `postgres` | Application database | Internal port 5432 |
+| `rustfs` | S3-compatible object storage | Internal port 9000 |
+| RustFS console | Storage administration | Host localhost port 9001 |
 
-### Persistent data
+### Persistent Docker volumes
 
-- `sms_pgdata` — PostgreSQL database files
-- `sms_rustfs_data` — RustFS objects and metadata
-- `sms_uploads` — Backend local uploads, if the application uses them
+The current setup uses these volume names:
 
-**Deployment must not delete these volumes.** Never run `docker compose down -v` or `docker volume prune` as part of a routine deployment.
+- `sms_pgdata` — PostgreSQL database data
+- `sms_rustfs_data` — RustFS object data and metadata
+- `sms_uploads` — backend local uploads, if used by the application
+
+Confirm actual volume names with `docker volume ls`. Compose project names and volume configuration can affect the final names.
+
+**Never delete persistent volumes during a normal deployment.** Do not run `docker compose down -v` or `docker volume prune` as a routine troubleshooting or deployment command.
 
 ---
 
-## 2. Requirements
-
-### AWS / server
+## 2. Prerequisites
 
 - Ubuntu EC2 instance or compatible Ubuntu VPS
-- Recommended starting size: at least 2 vCPU and 4 GB RAM; increase according to traffic and database size
-- Enough disk space for the application, uploaded files, and backups
 - SSH access
-- A domain name is recommended for production HTTPS
+- GitHub access to `sms-backend` and `sms-frontend`
+- Docker Engine and Docker Compose plugin
+- Sufficient disk space for the application, database, object storage, and backups
+- A domain name for production HTTPS, recommended
 
-### GitHub repositories
-
-- `sms-backend`
-- `sms-frontend`
-
-Current staging branch:
+The current staging branch is:
 
 ```text
 aphsmsp-stg
 ```
 
-The branch and image tags in this document must match the GitHub Actions workflow configuration.
-
-### GitHub Actions deployment flow
-
-1. Developer pushes code to `aphsmsp-stg`.
-2. GitHub Actions runs the configured checks and builds a Docker image.
-3. The image is pushed to GitHub Container Registry (GHCR).
-4. GitHub Actions connects to the staging server using SSH.
-5. The server pulls the new image and recreates the relevant service.
-
-Frontend and backend deployments are separate workflows. The exact workflow files in each repository are the source of truth for the triggers, secret names, image tags, and commands.
+Verify the branch and image names against the current GitHub Actions workflows before setting up a new environment.
 
 ---
 
-## 3. Create the EC2 Instance
+## 3. Create and Secure the Server
 
-1. Create an Ubuntu EC2 instance.
-2. Configure its security group.
-
-Recommended inbound rules:
+Create an Ubuntu EC2 instance and configure its security group.
 
 | Port | Source | Purpose |
 |---|---|---|
-| `22` | Your trusted IP/CIDR | SSH administration |
-| `80` | `0.0.0.0/0` | HTTP |
-| `443` | `0.0.0.0/0` | HTTPS, after TLS is configured |
+| 22 | Trusted administrator IP/CIDR | SSH |
+| 80 | Public, if the site is public | HTTP |
+| 443 | Public, after TLS configuration | HTTPS |
 
-Do not expose PostgreSQL port `5432`, backend port `8082`, or RustFS port `9000` directly to the Internet.
+Do not expose PostgreSQL `5432`, backend `8082`, or RustFS API `9000` directly to the public Internet.
 
-RustFS console port `9001` should remain bound to localhost. Do not add a public security-group rule for it.
+Keep the RustFS console restricted to localhost. Do not add a public security-group rule for port `9001`.
 
 Connect to the server:
 
@@ -249,11 +249,15 @@ The older setup documentation lists these backend secrets:
 - `STG_JWT_EXPIRES_IN`
 - SMTP-related secrets required by the application
 
-The old documentation also mentions `STG_MINIO_ROOT_USER` and `STG_MINIO_ROOT_PASSWORD`. Those are MinIO-specific names and must not be assumed correct for the current RustFS setup.
+Old documentation also referenced `STG_MINIO_ROOT_USER` and `STG_MINIO_ROOT_PASSWORD`. These names are MinIO-specific and must not be assumed to match the current RustFS configuration.
 
-**Before adding or renaming secrets:** inspect `.github/workflows/` in `sms-backend`. Use the exact names referenced by the workflow's `secrets.*` expressions. The workflow must map the GitHub secret values to the environment variable names required by the Compose file and backend.
+Inspect `sms-backend/.github/workflows/deploy.yml` and use the exact names that the workflow reads. Make sure the workflow maps GitHub secrets to the environment variables expected by the current Compose file and backend.
 
-For the current Compose configuration, the server `.env` needs at least the variables below, in addition to the backend's application-specific variables.
+---
+
+## 7. Configure the Server `.env`
+
+The current Compose configuration expects these variables:
 
 ```dotenv
 DB_USERNAME=your_database_user
@@ -270,57 +274,67 @@ BACKEND_IMAGE=ghcr.io/legacy-nightmare/sms-backend:stg
 FRONTEND_IMAGE=ghcr.io/legacy-nightmare/sms-frontend:stg
 ```
 
-These are examples, not production credentials. Generate unique credentials for every environment.
+These values are examples only. Generate unique credentials for each environment.
 
-Keep the existing JWT, SMTP, and other backend-specific variables required by the application's `.env` configuration. Do not replace a working application `.env` with only the example variables above.
+Keep all other application variables required by the backend, including JWT, SMTP, and any additional configuration referenced by the application.
 
-Set appropriate file permissions:
+Set restrictive permissions:
 
 ```bash
 chmod 600 /opt/sms/.env
 ```
 
+Do not print or paste secret values into GitHub issues, logs, or chat.
+
+### Environment separation
+
+Use separate credentials and configuration for staging and production.
+
+| Setting | Staging | Production |
+|---|---|---|
+| Database | Staging database | Production database |
+| Database password | Staging-only | Production-only |
+| JWT secret | Staging-only | Production-only |
+| RustFS credentials | Staging-only | Production-only |
+| Public URL | Staging URL | Client domain |
+| Image tag | Staging image | Approved release |
+
+Never point staging at the production database.
+
 ---
 
-## 7. First Deployment — Backend First
+## 8. First Deployment — Backend First
 
-The backend repository's deployment workflow is expected to provide the Compose and Nginx configuration files. The frontend deployment expects the shared stack to exist already.
+Deploy the backend first because the backend deployment workflow is expected to provide the shared Compose and Nginx configuration.
 
-### Step 1 — Deploy the backend
+### Step 1 — Trigger backend deployment
 
 1. Confirm the backend workflow is configured for `aphsmsp-stg`.
-2. Confirm the GitHub secrets are configured.
+2. Configure the required GitHub Actions secrets.
 3. Push or merge the intended backend commit into `aphsmsp-stg`.
-4. Open **GitHub → Actions** and inspect the backend workflow run.
-5. Confirm the image build, GHCR push, SSH connection, and deployment steps all succeed.
+4. Open GitHub Actions and inspect the workflow run.
+5. Confirm the image build, GHCR push, SSH connection, and deployment steps succeed.
 
-### Step 2 — Verify the server files
-
-SSH into the server:
+### Step 2 — Verify files on the server
 
 ```bash
 cd /opt/sms
 ls -la
 ```
 
-Confirm these files exist:
+Confirm `docker-compose.yml`, `nginx.conf`, and `.env` exist.
 
-```text
-docker-compose.yml
-nginx.conf
-.env
-```
-
-Check that `.env` contains the required variables without printing its secret values into logs or chat.
-
-### Step 3 — Validate Compose configuration
+### Step 3 — Validate Compose
 
 ```bash
-cd /opt/sms
 docker compose config -q
 ```
 
-If the command reports missing variables or invalid configuration, fix those before starting the stack.
+Resolve missing environment variables and configuration errors before starting the stack.
+
+Avoid publishing the output of `docker compose config`, because resolved configuration may contain secrets.
+
+### Step 4 — Start services
 
 Avoid sharing the output of `docker compose config` publicly because resolved configuration can contain secrets.
 
@@ -333,7 +347,7 @@ docker compose up -d
 docker compose ps
 ```
 
-Inspect service logs if a container fails:
+Inspect logs if any service fails:
 
 ```bash
 docker compose logs --tail=100 postgres
@@ -343,35 +357,17 @@ docker compose logs --tail=100 frontend
 docker compose logs --tail=100 nginx
 ```
 
-### Step 5 — Deploy the frontend
+### Step 5 — Deploy frontend
 
-Once the backend workflow has created the shared stack, push or merge the intended frontend commit into `aphsmsp-stg`.
+Once the shared stack exists, push or merge the intended frontend commit into `aphsmsp-stg`.
 
-Inspect the frontend workflow in GitHub Actions. Confirm that the image is pushed to GHCR and that the server successfully pulls and recreates the frontend service.
+Confirm the frontend workflow builds and publishes its image and successfully updates the frontend service on the staging server.
 
 ---
 
-## 8. Compose and Nginx Configuration
+## 9. Nginx and RustFS Configuration
 
-The source deployment files should be maintained in the backend repository, where the deployment workflow expects to find them.
-
-Expected source locations in the existing project:
-
-```text
-sms-backend/deploy/docker-compose.yml
-sms-backend/deploy/nginx.conf
-```
-
-Confirm these paths in the workflow before changing them. The deployed copies are expected at:
-
-```text
-/opt/sms/docker-compose.yml
-/opt/sms/nginx.conf
-```
-
-### Important service names
-
-The current Compose service names are:
+The Compose service names in the current setup are:
 
 ```text
 postgres
@@ -381,13 +377,17 @@ frontend
 nginx
 ```
 
-Inside the Compose network, Nginx should route to `backend`, `frontend`, and `rustfs`. It should not reference `minio` unless a service with that name actually exists.
+Nginx must use service names that actually exist on the shared Compose network.
 
-### Nginx storage route
+### Storage route
 
-For the current RustFS service, the storage route should target the RustFS S3 API on port `9000`, not a nonexistent `minio` hostname.
+The RustFS S3 API is available internally at:
 
-Example:
+```text
+http://rustfs:9000
+```
+
+Example Nginx route:
 
 ```nginx
 location /storage/ {
@@ -400,67 +400,80 @@ location /storage/ {
 }
 ```
 
-**URL mapping must be verified against the backend code.** With this example, Nginx strips the `/storage/` prefix before forwarding the request. Confirm that the backend generates object URLs that match this behavior and the actual bucket/object key layout.
+This example strips the `/storage/` prefix when forwarding requests. Verify the backend's generated file URLs and the actual bucket/object key structure before relying on this route.
 
-Do not assume that changing the Nginx route alone fixes public file URLs.
+Do not use `http://minio:9000` when the Compose service is named `rustfs`.
 
-### Test and reload Nginx
+### Test Nginx
+
+Run from `/opt/sms`:
 
 ```bash
-cd /opt/sms
-
 docker compose run --rm --no-deps nginx nginx -t
 docker compose up -d --no-deps --force-recreate nginx
-
 docker compose ps
 docker compose logs --tail=50 nginx
 ```
 
-If the Nginx test fails, fix the configuration before recreating the service.
+Fix configuration errors before recreating Nginx.
 
 ---
 
-## 9. Verify Staging
+## 10. Verify Staging
+
+Test the public application using the EC2 IP or configured domain.
 
 Run:
 
 ```bash
 cd /opt/sms
 docker compose ps
-```
-
-Check each service's logs and health status.
-
-Test the HTTP endpoint locally on the server:
-
-```bash
 curl -I http://localhost/
 ```
 
-Test the public website from a browser using the EC2 public IP or configured domain.
+Verify:
 
-Also verify:
+- [ ] Frontend loads.
+- [ ] Login and authentication work.
+- [ ] Backend API endpoints work.
+- [ ] Database reads and writes work.
+- [ ] File uploads work.
+- [ ] Existing uploaded files can be opened.
+- [ ] Generated file URLs are correct.
+- [ ] Email works, if applicable.
+- [ ] Data persists after restarting services.
 
-- Frontend loads successfully.
-- Login and authentication work.
-- Backend API routes respond correctly.
-- Database reads and writes work.
-- File uploads work.
-- Uploaded files can be retrieved through the intended public URL.
-- Email/SMTP features work, if used.
-- A server restart does not lose database records or uploaded files.
+## 9. Verify Staging
 
-Use the actual API health endpoint documented by the backend; do not assume that `/health` or `/api/health` exists.
+Run:
 
-### RustFS console
-
-The current Compose setup binds the console to:
-
-```text
-127.0.0.1:9001
+```bash
+ssh -i /path/to/key.pem \
+  -L 9001:127.0.0.1:9001 \
+  ubuntu@YOUR_EC2_PUBLIC_IP
 ```
 
-To access it through an SSH tunnel from your own computer:
+Then open:
+
+```text
+http://localhost:9001
+```
+
+Use the correct SSH username and key. Do not expose the console publicly for convenience.
+
+---
+
+## 11. Routine Deployment
+
+When code is pushed to the configured staging branch:
+
+1. GitHub Actions runs the configured checks.
+2. The workflow builds and publishes the Docker image.
+3. The deployment connects to the server.
+4. The server pulls the image and recreates the relevant service.
+5. Logs and service status are checked.
+
+Useful commands:
 
 ```bash
 ssh -i /path/to/key.pem \
@@ -497,146 +510,217 @@ docker compose logs --tail=100 backend
 docker compose logs --tail=100 frontend
 ```
 
-If the workflow fails, inspect the failed step in GitHub Actions first. Do not immediately delete volumes or reset the server.
+### Deployment safety rules
 
-### Important deployment rules
-
-- Never run `docker compose down -v` for a routine deployment.
-- Never remove `sms_pgdata`, `sms_rustfs_data`, or `sms_uploads` to fix an image problem.
-- Do not manually change `.env` without documenting the change.
-- Keep the source Compose and Nginx files in Git synchronized with the deployment workflow.
-- Use a tested image tag or commit SHA when rolling back, rather than assuming that `latest` points to a known version.
+- Never run `docker compose down -v` during routine deployment.
+- Never delete database or RustFS volumes to fix an image problem.
+- Do not change the production `.env` casually.
+- Keep the deployment files in Git synchronized with the files deployed to `/opt/sms`.
+- Record the deployed image tag or commit SHA for rollback.
+- Confirm backup availability before risky database or storage changes.
 
 ---
 
-## 11. Backup Policy
+## 12. Backup Strategy
 
-The staging server contains real application data. Treat backups as essential before production migration.
+The staging server contains application data. Back up both the database and uploaded objects.
 
-Back up these items:
+Required backup items:
 
 1. PostgreSQL database.
 2. RustFS data and metadata.
-3. Backend local uploads, if the application stores files in `/app/uploads`.
-4. Required environment configuration, stored securely and separately from public code.
-5. The exact application image tags/commit SHAs and deployment configuration.
+3. Local uploads in `sms_uploads`, if the application uses that volume.
+4. Required configuration, stored securely.
+5. Deployed image tags and commit SHAs.
 
-Store backups outside the server being backed up. Prefer encrypted storage with restricted access.
+Store backups off the server and protect them with appropriate access controls and encryption.
 
-**A database backup alone is not sufficient if database rows refer to uploaded files in RustFS or local uploads.**
+### Consistency requirement
 
-### Before starting a backup
+A database backup and object-storage backup must represent a compatible point in time. If database rows refer to files that are missing from storage, the application can become inconsistent.
 
-- Confirm there is enough disk space.
-- Confirm the target backup directory is protected.
-- Plan a maintenance window.
-- Stop application writes/uploads during the backup to reduce the risk of database/object-store inconsistency.
-- Confirm the backup will not overwrite an existing backup.
+Before the final migration backup:
 
-Create a backup directory:
+1. Stop new application writes and uploads.
+2. Stop all other writers.
+3. Back up PostgreSQL.
+4. Back up RustFS.
+5. Back up local uploads if required.
+6. Copy the backups off-server.
+7. Resume staging only after verification.
+
+---
+
+## 13. PostgreSQL Backup
+
+The current project includes `pg-backup.sh` and `pg-restore.sh`. Verify those scripts against the current Compose configuration before relying on them.
+
+PostgreSQL custom-format backup can be created with `pg_dump -Fc`.
+
+Example command from `/opt/sms`:
 
 ```bash
-cd /opt/sms
 mkdir -p backups
 chmod 700 backups
-```
 
-### Step 1 — Pause application writes
-
-During the planned backup window:
-
-```bash
-cd /opt/sms
-docker compose stop backend
-```
-
-This prevents the backend from accepting new writes through that service. Confirm there are no other processes writing directly to the database or object store.
-
-### Step 2 — Back up PostgreSQL
-
-The following uses PostgreSQL's custom dump format, which can later be restored with `pg_restore`.
-
-```bash
-cd /opt/sms
-
-BACKUP_DIR="$PWD/backups"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 docker compose exec -T postgres \
   sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' \
-  > "$BACKUP_DIR/postgres-$STAMP.dump"
+  > "backups/postgres-$STAMP.dump"
 
-test -s "$BACKUP_DIR/postgres-$STAMP.dump"
+test -s "backups/postgres-$STAMP.dump"
 ```
 
-Check the backup file:
+A non-empty file is only an initial check. For important data, verify the dump and perform a test restore in a separate database or environment.
 
-```bash
-ls -lh "$BACKUP_DIR"
+Official references:
+
+- https://www.postgresql.org/docs/current/app-pgdump.html
+- https://www.postgresql.org/docs/current/app-pgrestore.html
+
+---
+
+## 14. RustFS Backup
+
+The current RustFS container is expected to be named:
+
+```text
+sms-rustfs
 ```
 
-A non-empty file is only an initial check. For important backups, validate the dump with PostgreSQL tools and perform a test restore in a separate database or test environment.
+The Compose service is:
 
-### Step 3 — Back up RustFS
+```text
+rustfs
+```
 
-RustFS uses its own data directory, mounted at `/data` in the current Compose configuration.
+The data directory inside the container is:
 
-For a cold filesystem backup, stop RustFS first:
+```text
+/data
+```
+
+The project script should be named:
+
+```text
+rustfs-backup.sh
+```
+
+The backup archive naming convention is:
+
+```text
+rustfs-YYYYMMDDTHHMMSSZ.tar.gz
+```
+
+Example:
+
+```text
+backups/rustfs-20261027T120000Z.tar.gz
+```
+
+### Important
+
+A filesystem-level backup of RustFS `/data` is different from copying objects through the S3 API. It includes RustFS's internal data and metadata.
+
+A cold filesystem backup should be performed only after RustFS and other storage writers have stopped. Verify the actual volume/container name and ensure the archive can be read.
+
+Do not assume an archive is restorable across every RustFS version. Test restoration in an isolated environment first.
+
+If the application uses local backend uploads, back up that volume separately.
+
+---
+
+## 15. RustFS Restore
+
+The restore script is named:
+
+```text
+rustfs-restore.sh
+```
+
+Example invocation:
 
 ```bash
 cd /opt/sms
-docker compose stop rustfs
+chmod +x rustfs-restore.sh
+./rustfs-restore.sh backups/rustfs-20261027T120000Z.tar.gz
 ```
 
-Find the actual Docker volume name:
+Use the actual archive filename.
+
+### Destructive operation warning
+
+The restore process replaces the contents of the target RustFS data directory. It can destroy existing storage data.
+
+Before restoring:
+
+- [ ] Confirm the target server.
+- [ ] Confirm the archive is correct and readable.
+- [ ] Back up the existing target storage if it contains important data.
+- [ ] Stop the backend and all other writers.
+- [ ] Verify the RustFS container and volume names.
+- [ ] Prefer testing on an empty, separate volume first.
+
+The current restore script uses `--volumes-from sms-rustfs` to reuse the container's `/data` mount. The stopped container must still exist. Do not remove it during the restore process.
+
+After restoring, inspect logs and verify bucket contents and application file access.
 
 ```bash
-docker volume ls
-```
-
-The current expected name is `sms_rustfs_data`, but the actual name can differ if the Compose project or volume configuration changes. Verify it before proceeding.
-
-**Only continue after confirming the actual volume name.** The following example assumes the volume really is named `sms_rustfs_data`:
-
-```bash
-cd /opt/sms
-
-BACKUP_DIR="$PWD/backups"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-
-docker run --rm \
-  -v sms_rustfs_data:/data:ro \
-  -v "$BACKUP_DIR:/backup" \
-  alpine:3.20 \
-  tar -czf "/backup/rustfs-$STAMP.tar.gz" -C /data .
-```
-
-Verify that the archive exists:
-
-```bash
-ls -lh "$BACKUP_DIR"
-tar -tzf "$BACKUP_DIR/rustfs-$STAMP.tar.gz" | head
-```
-
-This is a **cold filesystem backup**, not a guarantee of compatibility across all RustFS versions. Test restoring it into a separate environment before relying on it for production migration.
-
-If the application uses the `sms_uploads` volume, back that volume up separately using the same general cold-backup method, after confirming the actual volume name and stopping all writers.
-
-### Step 4 — Resume staging
-
-Once the backups are complete:
-
-```bash
-cd /opt/sms
-docker compose up -d
 docker compose ps
+docker compose logs --tail=100 rustfs
+docker compose logs --tail=100 backend
 ```
 
-Verify the application and uploads before ending the maintenance window.
+Do not run a destructive restore against production until the procedure has been rehearsed successfully.
 
-### Step 5 — Copy backups off the EC2 server
+---
 
-For example, from your own computer:
+## 16. RustFS Bucket Policy
+
+The policy file is named:
+
+```text
+rustfs-policy.json
+```
+
+The existing policy allows anonymous users to read objects in the `sms-uploads` bucket:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": ["*"]
+      },
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::sms-uploads/*"]
+    }
+  ]
+}
+```
+
+This makes matching objects publicly readable if the policy is applied successfully.
+
+Use this only if public access is an intentional application requirement. Do not use an anonymous read policy for private or sensitive uploads.
+
+The bucket policy must be applied using a RustFS-compatible S3 administration method supported by the deployed version. Verify that method before documenting or running a policy command.
+
+The bucket name in the policy must match the configured bucket:
+
+```text
+sms-uploads
+```
+
+---
+
+## 17. Copy Backups to the Client VPS
+
+Copy the database and RustFS backups securely to the production server.
+
+Example from your local computer:
 
 ```bash
 scp -i /path/to/key.pem \
@@ -648,249 +732,130 @@ scp -i /path/to/key.pem \
   ./
 ```
 
-Replace the filenames with the actual generated filenames and use the correct SSH username.
+Replace the example filenames with the actual backup names. Use the correct SSH username and key.
 
-For ongoing operations, automate off-server backups to encrypted storage with restricted access and a documented retention policy.
+Then copy the files to the production server:
+
+```bash
+scp -i /path/to/client-key.pem \
+  postgres-YYYYMMDDTHHMMSSZ.dump \
+  CLIENT_SSH_USER@CLIENT_VPS_HOST:/secure/backup/path/
+
+scp -i /path/to/client-key.pem \
+  rustfs-YYYYMMDDTHHMMSSZ.tar.gz \
+  CLIENT_SSH_USER@CLIENT_VPS_HOST:/secure/backup/path/
+```
+
+Restrict access to the backup directory. Do not upload backups to a public web directory.
+
+For ongoing backups, use encrypted off-server storage and define a retention policy.
 
 ---
 
-## 12. Restore PostgreSQL on Production
+## 18. Staging to Production Migration
 
-**Warning: Database restoration can overwrite production data.** Confirm the target server, database, backup file, and maintenance window before executing any restore command.
-
-On the production server:
-
-1. Install and configure Docker.
-2. Deploy the production Compose configuration.
-3. Create the production `.env` with production-specific credentials.
-4. Start PostgreSQL and wait until it is healthy.
-5. Copy the selected database backup to the production server.
-6. Stop application writes before restoring.
-
-Example:
-
-```bash
-cd /opt/sms
-docker compose ps
-```
-
-Verify the correct PostgreSQL container and target database before continuing.
-
-For a restore into an existing target database, the following example removes conflicting objects in the target database before restoring. Use it only after verifying the target and preserving any data that must not be lost:
-
-```bash
-BACKUP_FILE="/opt/sms/backups/postgres-YYYYMMDDTHHMMSSZ.dump"
-
-test -s "$BACKUP_FILE"
-
-docker compose stop backend
-
-docker compose exec -T postgres \
-  sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' \
-  < "$BACKUP_FILE"
-```
-
-Check the command's exit status and inspect the output. Review extension requirements, database roles, ownership, and application migrations. `pg_dump` does not automatically recreate every server-level role or configuration.
-
-After restoring:
-
-```bash
-docker compose up -d
-docker compose ps
-docker compose logs --tail=100 backend
-```
-
-Verify application login, important database records, and any expected migrations. For a first-time production migration, restoring into a fresh, correctly configured database is often easier to reason about than merging with an existing live database.
-
----
-
-## 13. Restore RustFS on Production
-
-The RustFS archive must be restored to the correct RustFS data volume. **Do not extract it into a running RustFS data directory.**
-
-Before restoration:
-
-1. Confirm the production server and RustFS version.
-2. Confirm the intended target volume.
-3. Back up any existing production storage.
-4. Stop RustFS and all application writers.
-5. Prefer restoring into a new, empty volume or a disposable test environment first.
-
-Example below assumes the target volume is named `sms_rustfs_data`, the archive is present in `/opt/sms/backups`, and the target volume is intentionally empty.
-
-```bash
-cd /opt/sms
-docker compose stop backend rustfs
-docker volume ls
-```
-
-Verify the actual target volume name. Then restore:
-
-```bash
-BACKUP_FILE="/opt/sms/backups/rustfs-YYYYMMDDTHHMMSSZ.tar.gz"
-
-test -s "$BACKUP_FILE"
-
-docker run --rm \
-  -v sms_rustfs_data:/data \
-  -v "$PWD/backups:/backup:ro" \
-  alpine:3.20 \
-  sh -ec 'tar -xzf "/backup/'"$(basename "$BACKUP_FILE")"'" -C /data'
-```
-
-This example is for an **empty target volume**. Do not use it blindly against a volume containing existing files. If the target volume is not empty, stop and plan a safe migration rather than mixing old and restored storage data.
-
-Start RustFS:
-
-```bash
-docker compose up -d rustfs
-docker compose logs --tail=100 rustfs
-docker compose ps
-```
-
-Confirm that the expected buckets and objects are available through the S3 API and that the application can retrieve existing files.
-
-RustFS's internal data layout and metadata can be version-sensitive. A cold volume archive should be treated as a recovery method that must be tested, not as a universal cross-version migration format.
-
----
-
-## 14. Staging → Client Production Migration
-
-This is a **migration**, not simply a new deployment. It moves real data and application configuration to another environment.
+Treat this as a controlled migration, not just a new deployment.
 
 ### Phase A — Prepare production
 
-- Provision the client's VPS/EC2.
-- Install Docker and Compose.
-- Configure the firewall and SSH access.
-- Configure a domain and HTTPS plan.
-- Create a production `.env`.
-- Use unique production database, JWT, SMTP, and RustFS credentials.
-- Deploy and test the production Compose and Nginx configuration.
-- Confirm the correct production image tags are available in GHCR.
-- Ensure production storage has enough disk space.
-- Confirm that backups are stored off-server.
-
-Never copy staging secrets into production just to make deployment easier.
+1. Provision the client's Ubuntu VPS or EC2.
+2. Install Docker and Compose.
+3. Configure SSH and firewall rules.
+4. Configure production `.env` with production-only credentials.
+5. Deploy the verified Compose and Nginx configuration.
+6. Confirm production can pull the required GHCR images.
+7. Prepare production database and RustFS volumes.
+8. Ensure enough disk space is available.
+9. Plan DNS and HTTPS.
+10. Confirm a recovery backup exists.
 
 ### Phase B — Freeze staging writes
 
 At the agreed cutover time:
 
-1. Put the application into maintenance mode, or otherwise prevent new writes and uploads.
-2. Stop backend services and any other processes that write to the database or storage.
-3. Confirm users can no longer submit changes.
-4. Take the final database backup.
-5. Take the final RustFS backup.
-6. Back up the local uploads volume too, if it contains application data.
-7. Copy the backups securely to production.
+1. Put staging into maintenance mode or block new writes.
+2. Stop the backend and other database/storage writers.
+3. Take the final PostgreSQL backup.
+4. Take the final RustFS backup.
+5. Back up local uploads if needed.
+6. Copy backups to production.
+7. Verify archive integrity.
 
-Do not take a database backup at one time and an unrelated storage backup hours later while uploads continue. That can leave database records pointing to missing objects, or storage objects with no corresponding records.
+Do not let users continue uploading files during a backup intended to represent the final migration state.
 
 ### Phase C — Restore production
 
-1. Verify the backup filenames and integrity.
-2. Restore PostgreSQL into the intended production database.
-3. Restore RustFS data into the intended production volume.
-4. Restore local uploads if required.
-5. Confirm bucket names, access credentials, policies, and public URL configuration.
-6. Start the backend and frontend.
-7. Check logs and health status.
+1. Verify the target server and target database.
+2. Restore PostgreSQL.
+3. Restore RustFS into the intended storage volume.
+4. Restore local uploads if needed.
+5. Confirm the bucket and policy configuration.
+6. Set the correct production storage URL configuration.
+7. Start the services.
+8. Inspect logs and verify application connectivity.
 
-### Phase D — Validate before switching traffic
+Never restore over existing production data without an approved plan and a separate backup of that data.
 
-Use a checklist:
+### Phase D — Validate production
 
-- [ ] Frontend opens through the production domain.
+- [ ] Frontend loads through the production domain.
 - [ ] Login and authentication work.
-- [ ] Existing users and important records exist.
-- [ ] Critical database records match staging.
+- [ ] Expected users and database records exist.
+- [ ] Important records match the final staging backup.
 - [ ] Existing uploaded files open.
 - [ ] New uploads work.
-- [ ] The application generates correct file URLs.
-- [ ] Email works if required.
-- [ ] No unexpected database migration errors appear.
-- [ ] Logs do not contain repeated connection or permission errors.
-- [ ] A new production backup has been taken.
+- [ ] Generated object URLs are correct.
+- [ ] Email works, if required.
+- [ ] No repeated errors appear in application logs.
+- [ ] A new production backup is created.
 
 ### Phase E — Switch traffic
 
-Once production validation passes:
+After validation:
 
 1. Point the domain or traffic to production.
-2. Confirm HTTPS and API requests.
+2. Verify HTTPS and API requests.
 3. Monitor logs and user reports.
 4. Keep staging available for a planned rollback period.
-5. Do not allow staging and production to accept independent writes if you expect to switch back without reconciling their data.
+5. Prevent staging and production from accepting separate writes if you expect to switch back without reconciling data.
 
-If production receives new writes, switching back to staging can lose those new records. A rollback plan must cover both application code and data.
-
----
-
-## 15. Environment Separation
-
-Maintain separate configuration and credentials for each environment.
-
-| Setting | Staging | Production |
-|---|---|---|
-| Host | Staging EC2/VPS | Client VPS/EC2 |
-| Database | Staging database | Production database |
-| JWT secret | Staging-only secret | Production-only secret |
-| Database password | Staging-only | Production-only |
-| RustFS credentials | Staging-only | Production-only |
-| Public URL/domain | Staging URL | Production domain |
-| Image tag | Staging image/tag | Approved production tag |
-| Backups | Staging backup destination | Production backup destination |
-
-Do not point staging at the production database. Do not reuse JWT secrets between environments.
-
-The image tags and branch names are examples from the current staging setup; define a separate, controlled production release process.
+Once production receives new writes, switching back to staging can lose those records. The rollback plan must account for both application code and data.
 
 ---
 
-## 16. Troubleshooting
+## 19. Troubleshooting
 
-### A. GitHub Actions cannot connect through SSH
+### GitHub Actions SSH failure
 
 Check:
 
 - `STG_EC2_HOST`
 - `STG_EC2_SSH_USER`
 - `STG_EC2_SSH_KEY`
-- EC2 security-group port `22`
-- The key corresponds to the selected SSH user
-- The SSH user can access the deployment directory and Docker daemon
+- Security-group port 22
+- SSH username and private key
+- Deployment-directory and Docker permissions
 
-### B. GHCR login or image pull fails
+### GHCR image pull failure
 
 Check:
 
-- `STG_GHCR_USERNAME` is not blank.
-- `STG_GHCR_READ_TOKEN` is valid and has package-read access.
-- The token's account has access to the private image package.
-- The image name and tag match the Compose file.
-- The image package visibility and repository permissions are correct.
+- `STG_GHCR_USERNAME` is set.
+- `STG_GHCR_READ_TOKEN` has package-read permission.
+- The token owner can access the private package.
+- Image name and tag match Compose.
+- The workflow logs identify the failing step.
 
-### C. Nginx fails to start
-
-Inspect:
+### Nginx startup failure
 
 ```bash
-cd /opt/sms
 docker compose logs --tail=100 nginx
 docker compose run --rm --no-deps nginx nginx -t
 ```
 
-Check that:
+Check upstream names, Compose network membership, and configuration syntax. Use `rustfs` rather than `minio` when referring to the current storage service.
 
-- The upstream service names are correct.
-- `backend`, `frontend`, and `rustfs` are on the same Compose network.
-- Nginx configuration syntax is valid.
-- The storage route does not reference a nonexistent `minio` service.
-
-### D. Backend cannot connect to PostgreSQL
-
-Inspect:
+### PostgreSQL connection failure
 
 ```bash
 docker compose logs --tail=100 postgres
@@ -898,129 +863,79 @@ docker compose logs --tail=100 backend
 docker compose ps
 ```
 
-Check database credentials, `DB_HOST=postgres`, port `5432`, and the PostgreSQL health status.
+Check the database credentials, `DB_HOST=postgres`, port `5432`, and database health.
 
-### E. Backend cannot connect to RustFS
+### RustFS connection failure
 
-Check:
+Verify:
 
 ```text
 S3_ENDPOINT=http://rustfs:9000
 ```
 
-Confirm that:
+Also check the credentials, bucket name, service health, and storage permissions.
 
-- RustFS is healthy.
-- The backend and RustFS share a Docker network.
-- The access key and secret match.
-- The bucket exists.
-- The bucket policy and object permissions match the application's requirements.
+### Website returns 502
 
-### F. Website returns 502 Bad Gateway
+Inspect Nginx logs and verify the backend/frontend services are running and reachable over the Compose network.
 
-Check backend and frontend status, Nginx logs, upstream service names, and whether the relevant services are attached to the expected Compose network.
-
-### G. Server rebooted and services are unavailable
-
-Check the Rootless Docker daemon and its startup configuration, then inspect:
+### Disk space problem
 
 ```bash
-docker info
-docker compose ps
-```
-
-Follow the documented systemd/user-service setup for Rootless Docker. Do not delete volumes as a reboot troubleshooting step.
-
----
-
-## 17. Security Checklist
-
-- [ ] SSH is restricted to trusted IPs where practical.
-- [ ] Only intended public ports are open.
-- [ ] PostgreSQL is not exposed publicly.
-- [ ] RustFS API and console are not exposed publicly unless explicitly required and secured.
-- [ ] `.env` is not committed to Git.
-- [ ] Production secrets differ from staging secrets.
-- [ ] GHCR tokens have only the permissions they need.
-- [ ] Backups are stored off-server and protected.
-- [ ] Restore procedures have been tested.
-- [ ] Production uses HTTPS.
-- [ ] Disk space and backup retention are monitored.
-- [ ] Deployment never deletes persistent volumes.
-- [ ] Database and object storage are backed up as a coordinated set.
-
----
-
-## 18. Useful Commands
-
-Run these from `/opt/sms`:
-
-```bash
-# Check services
-docker compose ps
-
-# Inspect logs
-docker compose logs --tail=100 backend
-docker compose logs --tail=100 frontend
-docker compose logs --tail=100 postgres
-docker compose logs --tail=100 rustfs
-docker compose logs --tail=100 nginx
-
-# Validate Compose
-docker compose config -q
-
-# Validate Nginx
-docker compose run --rm --no-deps nginx nginx -t
-
-# Restart only the frontend
-docker compose up -d --no-deps frontend
-
-# Restart only the backend
-docker compose up -d --no-deps backend
-
-# Check disk usage
 df -h
-
-# List Docker volumes
+docker system df
 docker volume ls
 ```
 
-Do not use a destructive database restore command until the target server, database, and backup have been verified.
+Do not delete persistent volumes to reclaim disk space. Identify old images and backup retention needs first, and remove only items known to be safe.
 
 ---
 
-## 19. Project-Specific Items to Verify Before Calling This Runbook Complete
+## 20. Final Checklist
 
-The following depend on the current source code and workflow files. Verify them in the repositories and update this document accordingly.
+### Before staging goes live
 
-1. **Backend workflow:** Exact secret names, deployment path, environment-variable mapping, image tags, and Compose commands.
-2. **Frontend workflow:** Exact branch trigger, package-read secret names, image name, and deployment commands.
-3. **Compose source:** Confirm that `sms-backend/deploy/docker-compose.yml` matches the live Compose file in `/opt/sms`.
-4. **Nginx source:** Confirm that `sms-backend/deploy/nginx.conf` matches the live Nginx configuration.
-5. **Application environment:** List all required backend variables without publishing their secret values.
-6. **Admin bootstrap:** Confirm the actual bootstrap command in the current backend repository. Do not assume an old `node dist/bootstrap-admin.js` command is still valid if the backend runtime or implementation has changed.
-7. **RustFS backup/restore:** Perform a test restore into an isolated environment before relying on cold filesystem archives for production.
-8. **Local uploads:** Confirm whether `/app/uploads` contains files that must be migrated, or whether all uploads are stored in RustFS.
-9. **Public file URLs:** Confirm the actual URL format generated by the backend and how Nginx forwards storage requests.
-10. **Production HTTPS:** Document the actual certificate and reverse-proxy setup used by the client's server.
+- [ ] Docker and Rootless Docker startup configured.
+- [ ] GitHub secrets set.
+- [ ] Backend deployed first.
+- [ ] Frontend deployed successfully.
+- [ ] Compose and Nginx configuration validated.
+- [ ] Database and uploads tested.
+- [ ] Storage endpoint and URL generation tested.
+- [ ] Backups stored outside the EC2 instance.
+
+### Before production migration
+
+- [ ] Production credentials are separate.
+- [ ] Production deployment works with the approved images.
+- [ ] Staging writes are frozen.
+- [ ] PostgreSQL backup verified.
+- [ ] RustFS backup verified.
+- [ ] Local uploads backed up if needed.
+- [ ] Restore tested on an isolated environment.
+- [ ] Production database and storage restored.
+- [ ] Application validated before traffic switch.
+- [ ] Rollback plan documented.
+- [ ] Production backup taken after migration.
 
 ---
 
-## 20. Official References
+## Official Documentation
 
-- Docker Engine installation: https://docs.docker.com/engine/install/ubuntu/
+- Docker Engine: https://docs.docker.com/engine/install/ubuntu/
 - Docker Rootless mode: https://docs.docker.com/engine/security/rootless/
 - Docker Compose: https://docs.docker.com/compose/
 - GitHub Actions secrets: https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions
 - GitHub Container Registry: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
-- PostgreSQL `pg_dump`: https://www.postgresql.org/docs/current/app-pgdump.html
-- PostgreSQL `pg_restore`: https://www.postgresql.org/docs/current/app-pgrestore.html
+- PostgreSQL backup: https://www.postgresql.org/docs/current/app-pgdump.html
+- PostgreSQL restore: https://www.postgresql.org/docs/current/app-pgrestore.html
 - RustFS documentation: https://docs.rustfs.com/
 
 ---
 
-## Final operational rule
+## Operational Rule
 
-**Staging deploy = code/image update. Production migration = code + database + object storage + configuration + validation.**
+**Staging deployment updates application code. Production migration transfers application code, database data, object storage, configuration, and validated backups.**
 
-Keep those as two separate procedures. Before migrating real client data, complete at least one full backup-and-restore rehearsal on an isolated server. Update this README with the exact tested commands and actual workflow secret names once the repository files have been verified.
+Never consider the migration complete until the restored database and uploaded objects have been tested together on production.
+
