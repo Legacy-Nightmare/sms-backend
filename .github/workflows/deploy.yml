@@ -188,7 +188,7 @@ jobs:
             RUSTFS_ACCESS_KEY=$RUSTFS_ACCESS_KEY
             RUSTFS_SECRET_KEY=$RUSTFS_SECRET_KEY
             STORAGE_BUCKET=sms-uploads
-            STORAGE_PUBLIC_URL_BASE=
+            STORAGE_PUBLIC_URL_BASE=http://13.205.21.163
             S3_REGION=us-east-1
             EOF
             chmod 600 .env

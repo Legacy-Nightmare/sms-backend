@@ -36,13 +36,16 @@ export class StorageService {
 
     const publicUrlBase = this.config
       .get<string>('STORAGE_PUBLIC_URL_BASE', '')
-      .replace(/\/$/, '');
+      .trim()
+      .replace(/\/+$/, '');
 
-    // RustFS public URL base, if configured.
-    // Otherwise, use the S3 endpoint with the bucket path.
-    this.publicUrl = publicUrlBase
-      ? `${publicUrlBase}/${this.bucket}`
-      : `${s3Endpoint}/${this.bucket}`;
+    if (!publicUrlBase) {
+      throw new Error(
+        'STORAGE_PUBLIC_URL_BASE must be configured for public file URLs',
+      );
+    }
+
+    this.publicUrl = `${publicUrlBase}/${this.bucket}`;
 
     const accessKeyId = this.config.get<string>(
       'S3_ACCESS_KEY',
