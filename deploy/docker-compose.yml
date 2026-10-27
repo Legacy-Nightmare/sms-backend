@@ -5,18 +5,16 @@ services:
     container_name: sms-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${DB_USERNAME:?DB_USERNAME is required}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      POSTGRES_DB: ${DB_DATABASE:?DB_DATABASE is required}
+      POSTGRES_DB: ${POSTGRES_DB:-sms}
+      POSTGRES_USER: ${POSTGRES_USER:-sms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-      - sms_pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
     networks:
       - sms
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
       timeout: 5s
       retries: 10
 
@@ -27,79 +25,79 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
-      RUSTFS_VOLUMES: /data
-      RUSTFS_ADDRESS: 0.0.0.0:9000
-      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_OBS_LOGGER_LEVEL: error
-    command: /data
     volumes:
-      - sms_rustfs_data:/data
-    # Console is accessible only from the EC2 host.
-    # Do not expose the console publicly.
-    ports:
-      - "127.0.0.1:9001:9001"
+      - rustfs_data:/data
     networks:
       - sms
-    healthcheck:
-      test:
-        - CMD
-        - sh
-        - -ec
-        - >-
-          curl -fsS http://127.0.0.1:9000/health &&
-          curl -fsS http://127.0.0.1:9001/rustfs/console/health
-      interval: 20s
-      timeout: 10s
-      retries: 6
-      start_period: 40s
+    # Internal S3 API; not exposed directly to the internet.
+    # RustFS console port 9001 is also not publicly exposed.
+
+  rustfs-init:
+    image: minio/mc:latest
+    container_name: sms-rustfs-init
+    depends_on:
+      - rustfs
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until mc alias set local http://rustfs:9000 "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY"; do
+          echo "Waiting for RustFS..."
+          sleep 3
+        done
+        mc mb --ignore-existing local/sms-uploads
+        echo "Bucket sms-uploads is ready."
+    restart: "no"
+    networks:
+      - sms
 
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/legacy-nightmare/sms-backend:stg}
+    image: ghcr.io/legacy-nightmare/sms-backend:${BACKEND_IMAGE_TAG:?BACKEND_IMAGE_TAG is required}
     container_name: sms-backend
     restart: unless-stopped
-    env_file:
-      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
     environment:
-      PORT: 8082
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_SSL: "false"
+      NODE_ENV: production
+      PORT: "8082"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       S3_ENDPOINT: http://rustfs:9000
-      S3_REGION: us-east-1
+      S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
       S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
       S3_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
       STORAGE_PUBLIC_URL_BASE: ${STORAGE_PUBLIC_URL_BASE:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rustfs:
-        condition: service_healthy
-    volumes:
-      - sms_uploads:/app/uploads
+    expose:
+      - "8082"
     networks:
       - sms
 
   frontend:
-    image: ${FRONTEND_IMAGE:-ghcr.io/legacy-nightmare/sms-frontend:stg}
+    image: ghcr.io/legacy-nightmare/sms-frontend:${FRONTEND_IMAGE_TAG:-stg}
     container_name: sms-frontend
     restart: unless-stopped
+    expose:
+      - "3000"
     networks:
       - sms
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:alpine
     container_name: sms-nginx
     restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+      - rustfs
     ports:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - backend
-      - frontend
-      - rustfs
     networks:
       - sms
 
@@ -108,6 +106,7 @@ networks:
     driver: bridge
 
 volumes:
-  sms_pgdata:
-  sms_uploads:
-  sms_rustfs_data:
+  pgdata:
+    name: sms_pgdata
+  rustfs_data:
+    name: sms_rustfs_data
