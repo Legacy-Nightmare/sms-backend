@@ -3,9 +3,11 @@ name: Backend CI/CD
 
 on:
   push:
-    branches: [aphsmsp-stg]
+    branches:
+      - aphsmsp-stg
   pull_request:
-    branches: [aphsmsp-stg]
+    branches:
+      - aphsmsp-stg
 
 permissions:
   contents: read
@@ -56,36 +58,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Build
-        run: npm run build
-
-      - name: Unit tests
-        run: npm test
-
-      - name: Database migrations
-        run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
-
-      - name: E2E tests
-        run: npm run test:e2e
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
+      - run: npm run test:e2e
 
   build:
-    name: Build and publish backend image
+    name: Build and publish backend
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: write
@@ -103,8 +92,7 @@ jobs:
           REPO="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
           echo "image=ghcr.io/${REPO}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -123,15 +111,11 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    name: Deploy to staging
+    name: Deploy backend stack
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
     environment: staging
-
-    permissions:
-      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -146,27 +130,22 @@ jobs:
           target: "/opt/sms"
           strip_components: 1
 
-      - name: Deploy to EC2
+      - name: Deploy backend
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_READ_TOKEN: ${{ secrets.STG_GHCR_READ_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}
           IMAGE: ${{ needs.build.outputs.image }}
-          EC2_HOST: ${{ secrets.STG_EC2_HOST }}
-
           DB_USERNAME: ${{ secrets.STG_DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.STG_DB_PASSWORD }}
           DB_DATABASE: ${{ secrets.STG_DB_DATABASE }}
-
           JWT_SECRET: ${{ secrets.STG_JWT_SECRET }}
           JWT_EXPIRES_IN: ${{ secrets.STG_JWT_EXPIRES_IN }}
-
           SMTP_HOST: ${{ secrets.STG_SMTP_HOST }}
           SMTP_PORT: ${{ secrets.STG_SMTP_PORT }}
           SMTP_USER: ${{ secrets.STG_SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.STG_SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.STG_SMTP_FROM }}
-
           RUSTFS_ACCESS_KEY: ${{ secrets.STG_RUSTFS_ACCESS_KEY }}
           RUSTFS_SECRET_KEY: ${{ secrets.STG_RUSTFS_SECRET_KEY }}
 
@@ -174,9 +153,7 @@ jobs:
           host: ${{ secrets.STG_EC2_HOST }}
           username: ${{ secrets.STG_EC2_SSH_USER }}
           key: ${{ secrets.STG_EC2_SSH_KEY }}
-
-          envs: GHCR_READ_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
-
+          envs: GHCR_READ_TOKEN,GHCR_ACTOR,IMAGE,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
           script: |
             set -eu
             cd /opt/sms
@@ -201,7 +178,7 @@ jobs:
             RUSTFS_ACCESS_KEY=$RUSTFS_ACCESS_KEY
             RUSTFS_SECRET_KEY=$RUSTFS_SECRET_KEY
             STORAGE_BUCKET=sms-uploads
-            STORAGE_PUBLIC_URL_BASE=http://$EC2_HOST/storage
+            STORAGE_PUBLIC_URL_BASE=
             EOF
             chmod 600 .env
 
@@ -210,31 +187,17 @@ jobs:
 
             export BACKEND_IMAGE="$IMAGE"
 
-            # Validate configuration before rollout.
             docker compose config --quiet
+            docker compose pull postgres rustfs backend nginx
 
-            # Pull all required images first.
-            docker compose pull postgres rustfs backend frontend nginx
-
-            # Start infrastructure and wait for readiness.
             docker compose up -d --wait postgres rustfs
 
-            # Create/check the storage bucket.
-            docker compose run --rm storage-init
-
-            # Run database migrations.
-            docker compose run --rm backend \
+            docker compose run --rm --no-deps backend \
               node ./node_modules/typeorm/cli.js \
               migration:run -d dist/data-source.js
 
-            # Roll out application services.
-            docker compose up -d --wait backend frontend nginx
+            docker compose up -d --wait backend nginx
 
-            # Record deployed backend image for recovery reference.
+            docker compose ps
             printf '%s\n' "$IMAGE" > .deployed-backend-image
             chmod 600 .deployed-backend-image
-
-            # Conservative cleanup.
-            docker image prune -f
-
-            echo "Staging deployment completed."
