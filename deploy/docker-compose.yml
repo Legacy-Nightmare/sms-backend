@@ -34,7 +34,7 @@ services:
   # only the env var *values* below differ, not the app code. Single-node
   # mode: no erasure-coding replication overhead, storage ≈ actual file size.
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/aistor/minio:latest
     container_name: sms-minio
     restart: unless-stopped
     environment:
@@ -58,8 +58,8 @@ services:
   # every deploy: mc mb and a repeated set-json are both idempotent.
   minio-init:
     # Reuses the server image instead of the separate minio/mc image — mc
-    # ships inside minio/minio too, and minio/mc has had registry hiccups.
-    image: minio/minio:latest
+    # ships inside quay.io/minio/aistor/minio:latest too, and minio/mc has had registry hiccups.
+    image: quay.io/minio/aistor/minio:latest
     container_name: sms-minio-init
     depends_on:
       minio:
