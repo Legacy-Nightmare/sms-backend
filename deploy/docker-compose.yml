@@ -54,7 +54,7 @@ services:
       - sms
 
   backend:
-    image: ghcr.io/legacy-nightmare/sms-backend:${IMAGE:?IMAGE is required}
+    image: ${IMAGE:?IMAGE is required}
     container_name: sms-backend
     restart: unless-stopped
     depends_on:
