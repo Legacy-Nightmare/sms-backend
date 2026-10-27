@@ -1,4 +1,3 @@
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -29,25 +28,38 @@ services:
       - rustfs_data:/data
     networks:
       - sms
-    # Internal S3 API; not exposed directly to the internet.
-    # RustFS console port 9001 is also not publicly exposed.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
 
   rustfs-init:
-    image: quay.io/minio/mc:latest
+    image: amazon/aws-cli:latest
     container_name: sms-rustfs-init
     depends_on:
-      - rustfs
+      rustfs:
+        condition: service_started
     environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+      AWS_DEFAULT_REGION: ${S3_REGION:-us-east-1}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        until mc alias set local http://rustfs:9000 "$$RUSTFS_ACCESS_KEY" "$$RUSTFS_SECRET_KEY"; do
-          echo "Waiting for RustFS..."
+        set -eu
+
+        until aws --endpoint-url http://rustfs:9000 s3api list-buckets >/dev/null 2>&1; do
+          echo "Waiting for RustFS S3 API..."
           sleep 3
         done
-        mc mb --ignore-existing local/sms-uploads
+
+        if ! aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket sms-uploads >/dev/null 2>&1; then
+          aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket sms-uploads
+        fi
+
+        aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket sms-uploads
         echo "Bucket sms-uploads is ready."
     restart: "no"
     networks:
@@ -65,13 +77,31 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8082"
+
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_DATABASE: ${DB_DATABASE:?DB_DATABASE is required}
+      DB_SSL: "false"
       DATABASE_URL: postgres://${DB_USERNAME}:${DB_PASSWORD}@postgres:5432/${DB_DATABASE}
+
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+
       S3_ENDPOINT: http://rustfs:9000
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
       S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
       S3_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
       STORAGE_PUBLIC_URL_BASE: ${STORAGE_PUBLIC_URL_BASE:-}
+
     expose:
       - "8082"
     networks:
@@ -93,7 +123,6 @@ services:
     depends_on:
       - frontend
       - backend
-      - rustfs
     ports:
       - "80:80"
     volumes:
@@ -108,5 +137,6 @@ networks:
 volumes:
   pgdata:
     name: sms_pgdata
+
   rustfs_data:
     name: sms_rustfs_data
