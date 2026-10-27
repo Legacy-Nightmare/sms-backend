@@ -65,7 +65,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "8082"
-      DATABASE_URL: postgres://${{ secrets.DB_USERNAME }}:${{ secrets.DB_PASSWORD }}@postgres:5432/${{ secrets.DB_DATABASE }}
+      DATABASE_URL: postgres://${DB_USERNAME}:${DB_PASSWORD}@postgres:5432/${DB_DATABASE}
       S3_ENDPOINT: http://rustfs:9000
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
