@@ -33,7 +33,7 @@ services:
     # RustFS console port 9001 is also not publicly exposed.
 
   rustfs-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: sms-rustfs-init
     depends_on:
       - rustfs
