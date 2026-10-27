@@ -1,11 +1,3 @@
-# Runs on the EC2 (and later VPS) host itself — not used for local dev.
-# Lives at /opt/sms/docker-compose.yml on the server; synced there by the
-# backend repo's GitHub Actions deploy job on every push to aphsmsp-stg.
-#
-# Image tags are the mutable `:stg` tag (re-pushed on every merge to
-# aphsmsp-stg), so a deploy is just `docker compose pull <service> && up -d`.
-# Postgres and backend uploads are the only state that needs to survive a
-# redeploy — both are named volumes below.
 
 services:
   postgres:
@@ -18,117 +10,113 @@ services:
       POSTGRES_DB: ${DB_DATABASE}
     volumes:
       - sms_pgdata:/var/lib/postgresql/data
-    networks: [sms]
+    networks:
+      - sms
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME} -d ${DB_DATABASE}']
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
       interval: 5s
       timeout: 5s
       retries: 10
-    # Not published to the host — only reachable from other containers on
-    # the `sms` network. Use `docker compose exec postgres psql ...` or the
-    # backup.sh script for direct access.
 
-  # S3-compatible object store standing in for Supabase Storage, which
-  # staging doesn't have a project for. StorageService (src/platform/storage)
-  # talks to it via the same @aws-sdk/client-s3 code used for Supabase —
-  # only the env var *values* below differ, not the app code. Single-node
-  # mode: no erasure-coding replication overhead, storage ≈ actual file size.
-  minio:
-    image: quay.io/minio/aistor/minio:latest
-    container_name: sms-minio
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: sms-rustfs
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    command: server /data
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    command: /data
     volumes:
-      - sms_minio:/data
-    networks: [sms]
+      - sms_rustfs_data:/data
+    networks:
+      - sms
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
-      interval: 5s
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
+      interval: 10s
       timeout: 5s
       retries: 10
-    # Not published to the host — nginx proxies public reads at /storage/,
-    # uploads/deletes only ever happen from the backend container.
+      start_period: 20s
 
-  # One-shot: creates the bucket and grants anonymous GetObject only (not
-  # mc's built-in "download" preset — that also grants ListBucket, which
-  # would let anyone enumerate every uploaded filename). Safe to re-run on
-  # every deploy: mc mb and a repeated set-json are both idempotent.
-  minio-init:
-    # Reuses the server image instead of the separate minio/mc image — mc
-    # ships inside quay.io/minio/aistor/minio:latest too, and minio/mc has had registry hiccups.
-    image: quay.io/minio/aistor/minio:latest
-    container_name: sms-minio-init
+  storage-init:
+    image: amazon/aws-cli:2
+    container_name: sms-storage-init
+    restart: "no"
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
-    networks: [sms]
-    restart: 'no'
-    # minio-policy.json hardcodes the "sms-uploads" bucket name — update it
-    # too if MINIO_BUCKET is ever overridden to something else.
-    volumes:
-      - ./minio-policy.json:/tmp/policy.json:ro
-    entrypoint: >
-      sh -c "
-      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
-      mc mb -p local/${MINIO_BUCKET:-sms-uploads} &&
-      mc anonymous set-json /tmp/policy.json local/${MINIO_BUCKET:-sms-uploads}
-      "
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: us-east-1
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        until aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket "$$STORAGE_BUCKET" >/dev/null 2>&1; do
+          if aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$STORAGE_BUCKET"; then
+            break
+          fi
+          sleep 3
+        done
+        echo "Storage bucket is ready."
+    networks:
+      - sms
 
   backend:
     image: ${BACKEND_IMAGE:-ghcr.io/legacy-nightmare/sms-backend:stg}
     container_name: sms-backend
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
     environment:
-      # Always the in-network hostname/port — never from .env — so these
-      # can't drift from how the compose network is actually wired.
       PORT: 8082
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_SSL: 'false'
-      # MinIO stand-in for Supabase Storage — fixed/computed, not secret
-      # (SUPABASE_S3_ACCESS_KEY_ID/SECRET_ACCESS_KEY still come from .env,
-      # set to the same MinIO root credentials). STORAGE_PUBLIC_URL_BASE is
-      # exported by the deploy workflow from the EC2 host secret; see
-      # StorageService for why MinIO needs this and Supabase doesn't.
-      SUPABASE_S3_ENDPOINT: http://minio:9000
-      SUPABASE_S3_REGION: us-east-1
-      SUPABASE_STORAGE_BUCKET: ${MINIO_BUCKET:-sms-uploads}
+      DB_SSL: "false"
+      S3_ENDPOINT: http://rustfs:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
+      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
       STORAGE_PUBLIC_URL_BASE: ${STORAGE_PUBLIC_URL_BASE:-}
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
+      storage-init:
         condition: service_completed_successfully
     volumes:
       - sms_uploads:/app/uploads
-    networks: [sms]
+    networks:
+      - sms
 
   frontend:
     image: ${FRONTEND_IMAGE:-ghcr.io/legacy-nightmare/sms-frontend:stg}
     container_name: sms-frontend
     restart: unless-stopped
-    networks: [sms]
+    networks:
+      - sms
 
   nginx:
     image: nginx:1.27-alpine
     container_name: sms-nginx
     restart: unless-stopped
     ports:
-      - '80:80'
+      - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - backend
       - frontend
-      - minio
-    networks: [sms]
+      - rustfs
+    networks:
+      - sms
 
 networks:
   sms:
@@ -136,4 +124,4 @@ networks:
 volumes:
   sms_pgdata:
   sms_uploads:
-  sms_minio:
+  sms_rustfs_data:

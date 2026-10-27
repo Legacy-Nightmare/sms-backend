@@ -1,3 +1,4 @@
+
 name: Backend CI/CD
 
 on:
@@ -6,16 +7,21 @@ on:
   pull_request:
     branches: [aphsmsp-stg]
 
+permissions:
+  contents: read
+
 concurrency:
-  group: backend-${{ github.ref }}
+  group: backend-stg-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '22'
+  NODE_VERSION: "22"
 
 jobs:
   test:
+    name: Test backend
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -27,7 +33,10 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d school_management"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       PORT: 8082
       DB_HOST: localhost
@@ -35,17 +44,15 @@ jobs:
       DB_USERNAME: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: school_management
-      DB_SSL: 'false'
+      DB_SSL: "false"
       JWT_SECRET: ci-test-secret
       JWT_EXPIRES_IN: 1h
-      # Dummy S3-compatible values — StorageService constructs its S3 client
-      # eagerly at module init, so these just need to be syntactically valid,
-      # not real; nothing in the test suite actually calls Supabase.
-      SUPABASE_S3_ENDPOINT: http://localhost:54321/storage/v1/s3
-      SUPABASE_S3_REGION: us-east-1
-      SUPABASE_S3_ACCESS_KEY_ID: test
-      SUPABASE_S3_SECRET_ACCESS_KEY: test
-      SUPABASE_STORAGE_BUCKET: test-bucket
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: test
+      S3_SECRET_KEY: test
+      S3_BUCKET: test-bucket
+
     steps:
       - uses: actions/checkout@v4
 
@@ -56,104 +63,127 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run lint
+      - name: Lint
+        run: npm run lint
 
-      - run: npm run build
+      - name: Build
+        run: npm run build
 
       - name: Unit tests
         run: npm test
 
-      - name: Run migrations against the test database
+      - name: Database migrations
         run: node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
 
       - name: E2E tests
         run: npm run test:e2e
 
-  build-and-push:
+  build:
+    name: Build and publish image
     needs: test
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: write
+
     outputs:
-      image: ${{ steps.image.outputs.name }}
+      image: ${{ steps.meta.outputs.image }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute lowercase image name
-        id: image
-        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Define image
+        id: meta
+        shell: bash
+        run: |
+          REPO="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/${REPO}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:stg
-            ${{ steps.image.outputs.name }}:stg-${{ github.sha }}
+          tags: ${{ steps.meta.outputs.image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: build-and-push
+    name: Deploy to staging
+    needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+
+    environment: staging
+
     permissions:
       contents: read
       packages: read
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sync deploy config to EC2
+      - name: Sync deployment configuration
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.STG_EC2_HOST }}
           username: ${{ secrets.STG_EC2_SSH_USER }}
           key: ${{ secrets.STG_EC2_SSH_KEY }}
-          source: 'deploy/docker-compose.yml,deploy/nginx.conf,deploy/minio-policy.json'
-          target: '/opt/sms'
+          source: "deploy/docker-compose.yml,deploy/nginx.conf"
+          target: "/opt/sms"
           strip_components: 1
 
-      - name: Deploy backend container
+      - name: Deploy
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_ACTOR: ${{ github.actor }}
-          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          IMAGE: ${{ needs.build.outputs.image }}
           EC2_HOST: ${{ secrets.STG_EC2_HOST }}
+
           DB_USERNAME: ${{ secrets.STG_DB_USERNAME }}
           DB_PASSWORD: ${{ secrets.STG_DB_PASSWORD }}
           DB_DATABASE: ${{ secrets.STG_DB_DATABASE }}
+
           JWT_SECRET: ${{ secrets.STG_JWT_SECRET }}
           JWT_EXPIRES_IN: ${{ secrets.STG_JWT_EXPIRES_IN }}
+
           SMTP_HOST: ${{ secrets.STG_SMTP_HOST }}
           SMTP_PORT: ${{ secrets.STG_SMTP_PORT }}
           SMTP_USER: ${{ secrets.STG_SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.STG_SMTP_PASSWORD }}
           SMTP_FROM: ${{ secrets.STG_SMTP_FROM }}
-          # MinIO stands in for Supabase Storage on staging (no Supabase
-          # project here) — same StorageService code, different provider.
-          # See deploy/docker-compose.yml for how these map to the app's
-          # SUPABASE_S3_* env vars.
-          MINIO_ROOT_USER: ${{ secrets.STG_MINIO_ROOT_USER }}
-          MINIO_ROOT_PASSWORD: ${{ secrets.STG_MINIO_ROOT_PASSWORD }}
+
+          RUSTFS_ACCESS_KEY: ${{ secrets.STG_RUSTFS_ACCESS_KEY }}
+          RUSTFS_SECRET_KEY: ${{ secrets.STG_RUSTFS_SECRET_KEY }}
+
         with:
           host: ${{ secrets.STG_EC2_HOST }}
           username: ${{ secrets.STG_EC2_SSH_USER }}
           key: ${{ secrets.STG_EC2_SSH_KEY }}
-          envs: GHCR_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD
+
+          envs: GHCR_TOKEN,GHCR_ACTOR,IMAGE,EC2_HOST,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
+
           script: |
-            set -e
+            set -eu
             cd /opt/sms
 
+            test -n "$IMAGE"
+            test -n "$RUSTFS_ACCESS_KEY"
+            test -n "$RUSTFS_SECRET_KEY"
+
+            umask 077
             cat > .env <<EOF
             DB_USERNAME=$DB_USERNAME
             DB_PASSWORD=$DB_PASSWORD
@@ -165,20 +195,43 @@ jobs:
             SMTP_USER=$SMTP_USER
             SMTP_PASSWORD=$SMTP_PASSWORD
             SMTP_FROM=$SMTP_FROM
-            MINIO_ROOT_USER=$MINIO_ROOT_USER
-            MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
-            SUPABASE_S3_ACCESS_KEY_ID=$MINIO_ROOT_USER
-            SUPABASE_S3_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
+            RUSTFS_ACCESS_KEY=$RUSTFS_ACCESS_KEY
+            RUSTFS_SECRET_KEY=$RUSTFS_SECRET_KEY
+            STORAGE_BUCKET=sms-uploads
+            STORAGE_PUBLIC_URL_BASE=http://$EC2_HOST/storage
             EOF
             chmod 600 .env
 
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+            echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_ACTOR" --password-stdin
 
-            export BACKEND_IMAGE="$IMAGE:stg"
-            export STORAGE_PUBLIC_URL_BASE="http://$EC2_HOST/storage"
-            docker compose pull postgres minio backend
-            docker compose up -d --wait postgres minio
-            docker compose run --rm backend node ./node_modules/typeorm/cli.js migration:run -d dist/data-source.js
-            docker compose up -d --wait backend
-            docker compose up -d nginx
+            export BACKEND_IMAGE="$IMAGE"
+
+            # Validate Compose before changing running services.
+            docker compose config --quiet
+
+            # Pull all required images before rollout.
+            docker compose pull postgres rustfs backend frontend nginx
+
+            # Start infrastructure and wait for readiness.
+            docker compose up -d --wait postgres rustfs
+
+            # Ensure the bucket exists before backend startup.
+            docker compose run --rm storage-init
+
+            # Run migrations. Keep migrations backward-compatible.
+            docker compose run --rm backend \
+              node ./node_modules/typeorm/cli.js \
+              migration:run -d dist/data-source.js
+
+            # Start application services.
+            docker compose up -d --wait backend frontend nginx
+
+            # Persist the deployed image reference for recovery.
+            printf '%s\n' "$IMAGE" > .deployed-backend-image
+            chmod 600 .deployed-backend-image
+
+            # Keep cleanup conservative.
             docker image prune -f
+
+            echo "Staging deployment completed: $IMAGE"
