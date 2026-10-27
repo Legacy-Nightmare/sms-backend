@@ -5,9 +5,9 @@ services:
     container_name: sms-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${DB_USERNAME}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_DATABASE}
+      POSTGRES_USER: ${DB_USERNAME:?DB_USERNAME is required}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_DATABASE:?DB_DATABASE is required}
     volumes:
       - sms_pgdata:/var/lib/postgresql/data
     networks:
@@ -25,49 +25,34 @@ services:
     container_name: sms-rustfs
     restart: unless-stopped
     environment:
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
-      RUSTFS_ADDRESS: ":9000"
-      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_OBS_LOGGER_LEVEL: error
     command: /data
     volumes:
       - sms_rustfs_data:/data
+    # Console is accessible only from the EC2 host.
+    # Do not expose the console publicly.
+    ports:
+      - "127.0.0.1:9001:9001"
     networks:
       - sms
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-  storage-init:
-    image: amazon/aws-cli:2
-    container_name: sms-storage-init
-    restart: "no"
-    depends_on:
-      rustfs:
-        condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
-      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
-      AWS_DEFAULT_REGION: us-east-1
-      STORAGE_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -eu
-        until aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket "$$STORAGE_BUCKET" >/dev/null 2>&1; do
-          if aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$STORAGE_BUCKET"; then
-            break
-          fi
-          sleep 3
-        done
-        echo "Storage bucket is ready."
-    networks:
-      - sms
+      test:
+        - CMD
+        - sh
+        - -ec
+        - >-
+          curl -fsS http://127.0.0.1:9000/health &&
+          curl -fsS http://127.0.0.1:9001/rustfs/console/health
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
 
   backend:
     image: ${BACKEND_IMAGE:-ghcr.io/legacy-nightmare/sms-backend:stg}
@@ -82,15 +67,15 @@ services:
       DB_SSL: "false"
       S3_ENDPOINT: http://rustfs:9000
       S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
       S3_BUCKET: ${STORAGE_BUCKET:-sms-uploads}
-      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
-      S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
       STORAGE_PUBLIC_URL_BASE: ${STORAGE_PUBLIC_URL_BASE:-}
     depends_on:
       postgres:
         condition: service_healthy
-      storage-init:
-        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
     volumes:
       - sms_uploads:/app/uploads
     networks:
@@ -120,6 +105,7 @@ services:
 
 networks:
   sms:
+    driver: bridge
 
 volumes:
   sms_pgdata:
