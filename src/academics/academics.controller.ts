@@ -13,6 +13,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AcademicsService } from './academics.service';
 import { CreateClassDto } from './dto/create-class.dto';
+import { UpdateClassDto } from './dto/update-class.dto';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { UpdateResultWeightsDto } from './dto/update-result-weights.dto';
@@ -37,6 +38,12 @@ export class AcademicsController {
   @Get('classes')
   findAllClasses() {
     return this.academicsService.findAllClasses();
+  }
+
+  @Put('classes/:id')
+  @Roles(Role.ADMIN)
+  updateClass(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateClassDto) {
+    return this.academicsService.updateClass(id, dto);
   }
 
   @Put('classes/:id/result-weights')

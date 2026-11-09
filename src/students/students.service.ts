@@ -28,7 +28,7 @@ export class StudentsService {
       throw new NotFoundException('Section not found for this class');
     }
 
-    const code = `${classEntity.level}-${section.name}-${dto.roll}`;
+    const code = `${classEntity.name}-${section.name}-${dto.roll}`;
     const existing = await this.studentsRepo.findOne({ where: { code } });
     if (existing) {
       throw new ConflictException(`Student code ${code} already exists`);
@@ -128,7 +128,7 @@ export class StudentsService {
       if (!section) {
         throw new NotFoundException('Section not found for this class');
       }
-      code = `${classEntity.level}-${section.name}-${roll}`;
+      code = `${classEntity.name}-${section.name}-${roll}`;
       if (code !== existing.code) {
         const conflict = await this.studentsRepo.findOne({ where: { code } });
         if (conflict && conflict.id !== id) {

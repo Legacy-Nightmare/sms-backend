@@ -19,9 +19,9 @@ export class Student {
   @Column()
   name: string;
 
-  // Human-readable display code, format "{classLevel}-{section}-{roll}", e.g.
-  // "1-RUP-56". NOT what's enrolled on the ZKTeco device — device PINs are
-  // numeric-only, so this is for humans (reports, guardian-facing views).
+  // Human-readable display code, format "{className}-{section}-{roll}", e.g.
+  // "Class 1-RUP-56". NOT what's enrolled on the ZKTeco device — device PINs
+  // are numeric-only, so this is for humans (reports, guardian-facing views).
   @Column({ unique: true })
   code: string;
 
