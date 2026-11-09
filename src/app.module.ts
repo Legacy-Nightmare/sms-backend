@@ -14,6 +14,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FinanceModule } from './finance/finance.module';
 import { WebsiteModule } from './website/website.module';
+import { TeachersModule } from './teachers/teachers.module';
+import { SubjectsModule } from './subjects/subjects.module';
 import { StorageModule } from './platform/storage/storage.module';
 
 @Module({
@@ -54,6 +56,8 @@ import { StorageModule } from './platform/storage/storage.module';
     DashboardModule,
     FinanceModule,
     WebsiteModule,
+    TeachersModule,
+    SubjectsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

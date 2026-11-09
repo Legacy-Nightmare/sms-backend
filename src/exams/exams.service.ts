@@ -18,6 +18,7 @@ import { gradeForPercentage } from './grading';
 import { StudentsService } from '../students/students.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AcademicsService } from '../academics/academics.service';
+import { SubjectsService } from '../subjects/subjects.service';
 
 export interface SubjectResult {
   subjectId: number;
@@ -77,18 +78,23 @@ export class ExamsService {
     private readonly studentsService: StudentsService,
     private readonly notificationsService: NotificationsService,
     private readonly academicsService: AcademicsService,
+    private readonly subjectsService: SubjectsService,
   ) {}
 
   async createSubject(dto: CreateSubjectDto): Promise<Subject> {
     const existing = await this.subjectsRepo.findOne({
-      where: { classId: dto.classId, name: dto.name },
+      where: { classId: dto.classId, subjectId: dto.subjectId },
     });
     if (existing) {
-      throw new ConflictException(
-        `Subject ${dto.name} already exists for this class`,
-      );
+      throw new ConflictException('This subject is already added to this class');
     }
-    const subject = this.subjectsRepo.create(dto);
+    const catalogSubject = await this.subjectsService.findById(dto.subjectId);
+    const subject = this.subjectsRepo.create({
+      classId: dto.classId,
+      subjectId: dto.subjectId,
+      name: catalogSubject.name,
+      fullMarks: dto.fullMarks ?? catalogSubject.defaultFullMarks ?? 100,
+    });
     return this.subjectsRepo.save(subject);
   }
 
@@ -96,25 +102,33 @@ export class ExamsService {
     return this.subjectsRepo.find({ where: { classId } });
   }
 
+  findAllSubjectsWithClass(): Promise<
+    Array<{
+      id: number;
+      name: string;
+      fullMarks: number;
+      classId: number;
+      classLevel: number | null;
+      className: string;
+      classSortOrder: number;
+    }>
+  > {
+    return this.subjectsRepo.manager.query(
+      `SELECT cs.id AS "id", cs.name AS "name", cs.full_marks AS "fullMarks",
+              cs.class_id AS "classId", c.level AS "classLevel", c.name AS "className",
+              c.sort_order AS "classSortOrder"
+       FROM class_subjects cs
+       JOIN classes c ON c.id = cs.class_id
+       ORDER BY c.sort_order, cs.name`,
+    );
+  }
+
   async updateSubject(id: number, dto: UpdateSubjectDto): Promise<Subject> {
     const subject = await this.subjectsRepo.findOne({ where: { id } });
     if (!subject) {
       throw new NotFoundException('Subject not found');
     }
-    if (dto.name && dto.name !== subject.name) {
-      const existing = await this.subjectsRepo.findOne({
-        where: { classId: subject.classId, name: dto.name },
-      });
-      if (existing) {
-        throw new ConflictException(
-          `Subject ${dto.name} already exists for this class`,
-        );
-      }
-    }
-    await this.subjectsRepo.update(id, {
-      name: dto.name ?? subject.name,
-      fullMarks: dto.fullMarks ?? subject.fullMarks,
-    });
+    await this.subjectsRepo.update(id, { fullMarks: dto.fullMarks });
     return this.subjectsRepo.findOneByOrFail({ id });
   }
 

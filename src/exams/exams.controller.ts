@@ -40,6 +40,14 @@ export class ExamsController {
     return this.examsService.findSubjectsByClass(classId);
   }
 
+  // Every class's subjects in one list, with the class attached — used by
+  // the teacher class/subject multi-select, which needs to show all of
+  // them at once rather than one class at a time.
+  @Get('subjects/all')
+  findAllSubjects() {
+    return this.examsService.findAllSubjectsWithClass();
+  }
+
   @Put('subjects/:id')
   @Roles(Role.ADMIN)
   updateSubject(

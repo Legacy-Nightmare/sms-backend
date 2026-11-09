@@ -1,12 +1,13 @@
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsOptional, Min } from 'class-validator';
 
 export class CreateSubjectDto {
-  @IsString()
-  name: string;
-
   @IsInt()
   classId: number;
 
+  @IsInt()
+  subjectId: number;
+
+  // Omit to use the catalog subject's own default (or 100 if it has none).
   @IsOptional()
   @IsInt()
   @Min(1)
