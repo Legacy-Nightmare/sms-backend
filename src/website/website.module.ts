@@ -4,6 +4,7 @@ import { SchoolProfile } from './entities/school-profile.entity';
 import { Institution } from './entities/institution.entity';
 import { GalleryPhoto } from './entities/gallery-photo.entity';
 import { SiteDocument } from './entities/site-document.entity';
+import { HeroImage } from './entities/hero-image.entity';
 import { Notice } from '../notices/entities/notice.entity';
 import { Exam } from '../exams/entities/exam.entity';
 import { WebsiteService } from './website.service';
@@ -17,6 +18,7 @@ import { PublicController } from './public.controller';
       Institution,
       GalleryPhoto,
       SiteDocument,
+      HeroImage,
       Notice,
       Exam,
     ]),

@@ -46,9 +46,6 @@ export class SchoolProfile {
   @Column({ name: 'logo_url', nullable: true })
   logoUrl: string | null;
 
-  @Column({ name: 'hero_image_url', nullable: true })
-  heroImageUrl: string | null;
-
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

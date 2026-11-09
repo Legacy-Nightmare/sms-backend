@@ -5,6 +5,7 @@ import { SchoolProfile, SCHOOL_PROFILE_ID } from './entities/school-profile.enti
 import { Institution } from './entities/institution.entity';
 import { GalleryPhoto } from './entities/gallery-photo.entity';
 import { SiteDocument } from './entities/site-document.entity';
+import { HeroImage } from './entities/hero-image.entity';
 import { UpdateSchoolProfileDto } from './dto/update-school-profile.dto';
 import { CreateInstitutionDto } from './dto/create-institution.dto';
 import { UpdateInstitutionDto } from './dto/update-institution.dto';
@@ -23,6 +24,8 @@ export class WebsiteService {
     private readonly galleryRepo: Repository<GalleryPhoto>,
     @InjectRepository(SiteDocument)
     private readonly documentsRepo: Repository<SiteDocument>,
+    @InjectRepository(HeroImage)
+    private readonly heroImagesRepo: Repository<HeroImage>,
     // Read-only here — publishing itself is owned by NoticesService /
     // ExamsService. Queried directly rather than through those services to
     // avoid depending on their guardian-notification side effects for what
@@ -60,10 +63,42 @@ export class WebsiteService {
     return this.getProfile();
   }
 
-  async setHeroImage(url: string): Promise<SchoolProfile> {
-    await this.getProfile();
-    await this.profileRepo.update(SCHOOL_PROFILE_ID, { heroImageUrl: url });
-    return this.getProfile();
+  findAllHeroImages(): Promise<HeroImage[]> {
+    return this.heroImagesRepo.find({ order: { sortOrder: 'ASC', id: 'ASC' } });
+  }
+
+  async addHeroImage(imageUrl: string): Promise<HeroImage> {
+    const { max } = await this.heroImagesRepo
+      .createQueryBuilder('h')
+      .select('MAX(h.sortOrder)', 'max')
+      .getRawOne<{ max: string | null }>();
+    const sortOrder = (max ? parseInt(max, 10) : 0) + 1;
+    const image = this.heroImagesRepo.create({ imageUrl, sortOrder });
+    return this.heroImagesRepo.save(image);
+  }
+
+  async reorderHeroImage(id: number, sortOrder: number): Promise<HeroImage> {
+    const result = await this.heroImagesRepo.update(id, { sortOrder });
+    if (result.affected === 0) {
+      throw new NotFoundException('Hero image not found');
+    }
+    const image = await this.heroImagesRepo.findOne({ where: { id } });
+    if (!image) {
+      throw new NotFoundException('Hero image not found');
+    }
+    return image;
+  }
+
+  async removeHeroImage(id: number): Promise<void> {
+    const image = await this.heroImagesRepo.findOne({ where: { id } });
+    if (!image) {
+      throw new NotFoundException('Hero image not found');
+    }
+    await this.heroImagesRepo.delete(id);
+    const key = this.storage.keyFromPublicUrl(image.imageUrl);
+    if (key) {
+      await this.storage.remove(key);
+    }
   }
 
   findAllInstitutions(): Promise<Institution[]> {
@@ -162,14 +197,16 @@ export class WebsiteService {
     institutions: Institution[];
     gallery: GalleryPhoto[];
     documents: SiteDocument[];
+    heroImages: HeroImage[];
   }> {
-    const [profile, institutions, gallery, documents] = await Promise.all([
+    const [profile, institutions, gallery, documents, heroImages] = await Promise.all([
       this.getProfile(),
       this.findActiveInstitutions(),
       this.findAllGalleryPhotos(),
       this.findAllDocuments(),
+      this.findAllHeroImages(),
     ]);
-    return { profile, institutions, gallery, documents };
+    return { profile, institutions, gallery, documents, heroImages };
   }
 
   // Notices an admin has explicitly published to the website — independent

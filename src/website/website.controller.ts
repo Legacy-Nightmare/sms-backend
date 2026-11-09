@@ -20,6 +20,7 @@ import { CreateInstitutionDto } from './dto/create-institution.dto';
 import { UpdateInstitutionDto } from './dto/update-institution.dto';
 import { CreateGalleryPhotoDto } from './dto/create-gallery-photo.dto';
 import { CreateSiteDocumentDto } from './dto/create-site-document.dto';
+import { UpdateHeroImageDto } from './dto/update-hero-image.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -76,11 +77,16 @@ export class WebsiteController {
     return this.websiteService.setLogo(url);
   }
 
-  @Post('profile/hero-image')
+  @Get('hero-images')
+  findAllHeroImages() {
+    return this.websiteService.findAllHeroImages();
+  }
+
+  @Post('hero-images')
   @UseInterceptors(
     FileInterceptor('image', memoryUpload(IMAGE_TYPES, MAX_IMAGE_SIZE)),
   )
-  async uploadHeroImage(@UploadedFile() file: Express.Multer.File) {
+  async addHeroImage(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('No image uploaded');
     }
@@ -89,7 +95,20 @@ export class WebsiteController {
       file.buffer,
       file.mimetype,
     );
-    return this.websiteService.setHeroImage(url);
+    return this.websiteService.addHeroImage(url);
+  }
+
+  @Put('hero-images/:id')
+  reorderHeroImage(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateHeroImageDto,
+  ) {
+    return this.websiteService.reorderHeroImage(id, dto.sortOrder);
+  }
+
+  @Delete('hero-images/:id')
+  removeHeroImage(@Param('id', ParseIntPipe) id: number) {
+    return this.websiteService.removeHeroImage(id);
   }
 
   @Get('institutions')
