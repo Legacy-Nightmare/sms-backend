@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -61,6 +66,31 @@ export class UsersService {
       .addSelect('user.passwordHash')
       .where('user.email = :email', { email })
       .getOne();
+  }
+
+  async changePassword(
+    id: number,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const user = await this.usersRepo
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.id = :id', { id })
+      .getOne();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!matches) {
+      // 403, not 401 — the session token itself is still valid; only this
+      // secondary credential check failed. The frontend treats any 401 as
+      // "session expired" and force-logs-out, which would otherwise kick
+      // the user to the login screen on a simple wrong-password typo.
+      throw new ForbiddenException('Current password is incorrect');
+    }
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.usersRepo.save(user);
   }
 
   async updateRole(id: number, role: Role): Promise<User> {
