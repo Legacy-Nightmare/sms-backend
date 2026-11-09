@@ -2,41 +2,42 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-// Supabase Storage exposes an S3-compatible endpoint per project, so the
-// regular AWS S3 SDK works against it unmodified — just pointed at
-// Supabase's endpoint/region/credentials instead of AWS. Chosen over
-// Cloudflare R2 specifically because Supabase's free tier doesn't require a
-// card on file; R2 does, even at $0 usage.
+// RustFS (self-hosted, S3-compatible object storage) backs file uploads —
+// the regular AWS S3 SDK works against it unmodified, just pointed at
+// RustFS's endpoint/region/credentials instead of AWS. Uses the same
+// RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY root credentials docker-compose.yml
+// gives the rustfs container itself — one set of credentials, not a
+// separate pair for the S3 client.
+//
+// S3_ENDPOINT and STORAGE_PUBLIC_URL_BASE are deliberately separate
+// configs: RustFS's S3 port isn't exposed to the public internet (only
+// reachable from the backend over the Docker network, at the default
+// http://rustfs:9000), so the SDK talks to it there, while the URL handed
+// back to clients/stored in the DB must point at wherever a reverse proxy
+// exposes the bucket externally.
 @Injectable()
 export class StorageService {
   private readonly client: S3Client;
   private readonly bucket: string;
-  private readonly publicUrl: string;
+  private readonly publicUrlBase: string;
 
   constructor(private readonly config: ConfigService) {
-    // Copy-pasted straight from Project Settings > Storage > S3 Connection,
-    // e.g. "https://<ref>.storage.supabase.co/storage/v1/s3" — not
-    // reconstructed from the project ref, since Supabase's storage domain
-    // (storage.supabase.co) differs from its main API domain (supabase.co)
-    // and isn't worth guessing at.
-    const s3Endpoint = this.config.get<string>('SUPABASE_S3_ENDPOINT', '').replace(/\/$/, '');
-    const region = this.config.get<string>('SUPABASE_S3_REGION', 'us-east-1');
-    this.bucket = this.config.get<string>('SUPABASE_STORAGE_BUCKET', '');
-    // The public object-read REST API lives on the same host as the S3
-    // endpoint, just under /object/public/<bucket> instead of /s3.
-    this.publicUrl = `${s3Endpoint.replace(/\/s3$/, '')}/object/public/${this.bucket}`;
+    const s3Endpoint = this.config.get<string>('S3_ENDPOINT', 'http://rustfs:9000').replace(/\/$/, '');
+    const region = this.config.get<string>('S3_REGION', 'us-east-1');
+    this.bucket = this.config.get<string>('STORAGE_BUCKET', '');
+    this.publicUrlBase = this.config.get<string>('STORAGE_PUBLIC_URL_BASE', '').replace(/\/$/, '');
 
     this.client = new S3Client({
       region,
       endpoint: s3Endpoint,
-      // Supabase's S3 endpoint is one host shared by every project, with the
-      // bucket named in the path (not a bucket-specific subdomain) — the SDK
-      // must be told to address it that way instead of the AWS-default
-      // virtual-hosted style.
+      // RustFS is one host shared across all buckets, with the bucket named
+      // in the path (not a bucket-specific subdomain) — the SDK must be told
+      // to address it that way instead of the AWS-default virtual-hosted
+      // style.
       forcePathStyle: true,
       credentials: {
-        accessKeyId: this.config.get<string>('SUPABASE_S3_ACCESS_KEY_ID', ''),
-        secretAccessKey: this.config.get<string>('SUPABASE_S3_SECRET_ACCESS_KEY', ''),
+        accessKeyId: this.config.get<string>('RUSTFS_ACCESS_KEY', ''),
+        secretAccessKey: this.config.get<string>('RUSTFS_SECRET_KEY', ''),
       },
     });
   }
@@ -53,10 +54,21 @@ export class StorageService {
         ContentType: contentType,
       }),
     );
-    return `${this.publicUrl}/${key}`;
+    return `${this.publicUrlBase}/${this.bucket}/${key}`;
   }
 
   async remove(key: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+  }
+
+  // Recovers the key `upload()` returned a public URL for, so a delete flow
+  // can clean up the stored object instead of just dropping the DB row and
+  // leaking it. Returns null for anything that isn't one of our own current
+  // URLs (old Supabase/local-disk URLs from before this storage backend, or
+  // a public base URL that's since changed) — those have nothing in this
+  // bucket to remove.
+  keyFromPublicUrl(url: string): string | null {
+    const prefix = `${this.publicUrlBase}/${this.bucket}/`;
+    return url.startsWith(prefix) ? url.slice(prefix.length) : null;
   }
 }
