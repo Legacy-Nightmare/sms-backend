@@ -1,10 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { memoryStorage } from 'multer';
 
-// Shared multer config for every upload endpoint that stores into Supabase
-// Storage — files land in memory as a Buffer (file.buffer) instead of on
-// local disk, since the disk here is ephemeral on most free hosts and
-// StorageService needs the bytes in-process to forward them on anyway.
+// Shared multer config for every upload endpoint that stores into RustFS —
+// files land in memory as a Buffer (file.buffer) instead of on local disk,
+// since the disk here is ephemeral on most free hosts and StorageService
+// needs the bytes in-process to forward them on anyway.
 export function memoryUpload(allowedTypes: string[], maxSize: number) {
   return {
     storage: memoryStorage(),

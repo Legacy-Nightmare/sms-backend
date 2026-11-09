@@ -26,6 +26,7 @@ describe('ExamsService.enterMarks', () => {
     studentsService = { findAll: jest.fn().mockResolvedValue(students) };
     const notificationsService = { sendMail: jest.fn() };
     const academicsService = { findClassById: jest.fn() };
+    const subjectsService = { findById: jest.fn() };
 
     // Constructed directly (no Nest TestingModule/DI) — this is a plain unit
     // test of the validation + transaction logic, not of Nest wiring, and
@@ -38,6 +39,7 @@ describe('ExamsService.enterMarks', () => {
       studentsService as never,
       notificationsService as never,
       academicsService as never,
+      subjectsService as never,
     );
   });
 
@@ -155,6 +157,7 @@ describe('ExamsService.getCombinedResult', () => {
     const academicsService = {
       findClassById: jest.fn().mockResolvedValue(classEntity),
     };
+    const subjectsService = { findById: jest.fn() };
 
     return new ExamsService(
       subjectsRepo as never,
@@ -163,6 +166,7 @@ describe('ExamsService.getCombinedResult', () => {
       studentsService as never,
       notificationsService as never,
       academicsService as never,
+      subjectsService as never,
     );
   }
 

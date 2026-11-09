@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import { ClassEntity } from './entities/class.entity';
 import { Section } from './entities/section.entity';
 import { CreateClassDto } from './dto/create-class.dto';
+import { UpdateClassDto } from './dto/update-class.dto';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { UpdateResultWeightsDto } from './dto/update-result-weights.dto';
@@ -26,14 +27,63 @@ export class AcademicsService {
   ) {}
 
   async createClass(dto: CreateClassDto): Promise<ClassEntity> {
-    const existing = await this.classesRepo.findOne({
-      where: { level: dto.level },
-    });
-    if (existing) {
-      throw new ConflictException(`Class level ${dto.level} already exists`);
+    if (dto.level !== undefined) {
+      const existingLevel = await this.classesRepo.findOne({
+        where: { level: dto.level },
+      });
+      if (existingLevel) {
+        throw new ConflictException(`Class level ${dto.level} already exists`);
+      }
     }
-    const classEntity = this.classesRepo.create(dto);
+    const existingName = await this.classesRepo.findOne({
+      where: { name: dto.name },
+    });
+    if (existingName) {
+      throw new ConflictException(`A class named "${dto.name}" already exists`);
+    }
+
+    const sortOrder = dto.sortOrder ?? (await this.nextSortOrder());
+    const classEntity = this.classesRepo.create({ ...dto, sortOrder });
     return this.classesRepo.save(classEntity);
+  }
+
+  private async nextSortOrder(): Promise<number> {
+    const { max } = await this.classesRepo
+      .createQueryBuilder('c')
+      .select('MAX(c.sortOrder)', 'max')
+      .getRawOne<{ max: string | null }>();
+    return (max ? parseInt(max, 10) : 0) + 1;
+  }
+
+  async updateClass(id: number, dto: UpdateClassDto): Promise<ClassEntity> {
+    const classEntity = await this.findClassById(id);
+
+    if (dto.name !== undefined && dto.name !== classEntity.name) {
+      const existingName = await this.classesRepo.findOne({
+        where: { name: dto.name },
+      });
+      if (existingName) {
+        throw new ConflictException(`A class named "${dto.name}" already exists`);
+      }
+      classEntity.name = dto.name;
+    }
+    if (dto.level !== undefined) {
+      if (dto.level !== null && dto.level !== classEntity.level) {
+        const existingLevel = await this.classesRepo.findOne({
+          where: { level: dto.level },
+        });
+        if (existingLevel) {
+          throw new ConflictException(`Class level ${dto.level} already exists`);
+        }
+      }
+      classEntity.level = dto.level;
+    }
+    if (dto.sortOrder !== undefined) {
+      classEntity.sortOrder = dto.sortOrder;
+    }
+
+    await this.classesRepo.save(classEntity);
+    return this.findClassById(id);
   }
 
   // Attaches a live student count per class and per section — the frontend
@@ -42,7 +92,7 @@ export class AcademicsService {
   async findAllClasses() {
     const classes = await this.classesRepo.find({
       relations: { sections: true },
-      order: { level: 'ASC' },
+      order: { sortOrder: 'ASC' },
     });
 
     const [classCounts, sectionCounts] = await Promise.all([

@@ -16,6 +16,54 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - sms
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: sms-rustfs
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY is required}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY is required}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    command: /data
+    volumes:
+      - sms_rustfs_data:/data
+    # In production this container only needs to be reachable at
+    # rustfs:9000 from other containers on the `sms` network (the backend
+    # talks to it there; public file access goes through a reverse-proxy
+    # path on the main domain instead — see STORAGE_PUBLIC_BASE_URL in
+    # .env.example). The 9000 mapping below is for local dev only, where
+    # the backend runs on the host via `npm run start:dev`, not in this
+    # network — bound to loopback, never exposed on all interfaces.
+    # Console is accessible only from the EC2 host. Do not expose the
+    # console publicly.
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    networks:
+      - sms
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -ec
+        - >-
+          curl -fsS http://127.0.0.1:9000/health &&
+          curl -fsS http://127.0.0.1:9001/rustfs/console/health
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
+
+networks:
+  sms:
 
 volumes:
   sms_pgdata:
+  sms_rustfs_data:

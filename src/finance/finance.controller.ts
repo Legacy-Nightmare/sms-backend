@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
-import { UsersService } from '../users/users.service';
+import { TeachersService } from '../teachers/teachers.service';
 import { FeeTypesService } from './fee-types.service';
 import { StudentFeesService } from './student-fees.service';
 import { TeacherSalaryService } from './teacher-salary.service';
@@ -34,7 +34,7 @@ export class FinanceController {
     private readonly teacherSalaryService: TeacherSalaryService,
     private readonly expensesService: ExpensesService,
     private readonly reportService: FinanceReportService,
-    private readonly usersService: UsersService,
+    private readonly teachersService: TeachersService,
   ) {}
 
   // ---- fee types + per-class fee structure ----
@@ -113,7 +113,7 @@ export class FinanceController {
 
   @Get('teachers')
   findTeachers() {
-    return this.usersService.findByRole(Role.TEACHER);
+    return this.teachersService.findAll();
   }
 
   @Post('teacher-salaries')

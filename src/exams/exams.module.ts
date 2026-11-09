@@ -8,6 +8,7 @@ import { ExamsController } from './exams.controller';
 import { StudentsModule } from '../students/students.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AcademicsModule } from '../academics/academics.module';
+import { SubjectsModule } from '../subjects/subjects.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AcademicsModule } from '../academics/academics.module';
     StudentsModule,
     NotificationsModule,
     AcademicsModule,
+    SubjectsModule,
   ],
   controllers: [ExamsController],
   providers: [ExamsService],

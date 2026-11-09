@@ -106,4 +106,15 @@ export class StorageService {
       }),
     );
   }
+
+  // Recovers the key `upload()` returned a public URL for, so a delete flow
+  // can clean up the stored object instead of just dropping the DB row and
+  // leaking it. Returns null for anything that isn't one of our own current
+  // URLs (old Supabase/local-disk URLs from before this storage backend, or
+  // a public base URL that's since changed) — those have nothing in this
+  // bucket to remove.
+  keyFromPublicUrl(url: string): string | null {
+    const prefix = `${this.publicUrl}/`;
+    return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+  }
 }

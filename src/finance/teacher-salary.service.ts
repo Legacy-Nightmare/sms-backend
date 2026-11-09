@@ -6,11 +6,13 @@ import { SalaryPayment } from './entities/salary-payment.entity';
 import { CreateTeacherSalaryDto, BulkGenerateSalaryDto } from './dto/teacher-salary.dto';
 import { RecordPaymentDto, VoidRecordDto } from './dto/payment.dto';
 import { RecordStatus } from './entities/enums';
+import { TeachersService } from '../teachers/teachers.service';
 
 export interface TeacherSalaryRow {
   id: number;
   teacherId: number;
   teacherName: string;
+  teacherSubject: string | null;
   amountDue: number;
   paid: number;
   remaining: number;
@@ -35,6 +37,7 @@ export class TeacherSalaryService {
   constructor(
     @InjectRepository(TeacherSalary) private readonly salariesRepo: Repository<TeacherSalary>,
     @InjectRepository(SalaryPayment) private readonly paymentsRepo: Repository<SalaryPayment>,
+    private readonly teachersService: TeachersService,
   ) {}
 
   async create(dto: CreateTeacherSalaryDto, createdById: number): Promise<TeacherSalary> {
@@ -48,15 +51,24 @@ export class TeacherSalaryService {
     }
   }
 
-  async bulkGenerate(dto: BulkGenerateSalaryDto, createdById: number): Promise<{ created: number; skipped: number }> {
+  async bulkGenerate(
+    dto: BulkGenerateSalaryDto,
+    createdById: number,
+  ): Promise<{ created: number; skipped: number; noSalarySet: number }> {
     let created = 0;
     let skipped = 0;
+    let noSalarySet = 0;
     for (const teacherId of dto.teacherIds) {
+      const teacher = await this.teachersService.findById(teacherId);
+      if (teacher.salary == null) {
+        noSalarySet += 1;
+        continue;
+      }
       try {
         await this.salariesRepo.save(
           this.salariesRepo.create({
             teacherId,
-            amountDue: dto.amountDue,
+            amountDue: teacher.salary,
             periodMonth: dto.periodMonth,
             periodYear: dto.periodYear,
             createdById,
@@ -71,7 +83,7 @@ export class TeacherSalaryService {
         throw err;
       }
     }
-    return { created, skipped };
+    return { created, skipped, noSalarySet };
   }
 
   private isUniqueViolation(err: unknown): boolean {
@@ -101,6 +113,9 @@ export class TeacherSalaryService {
           ts.id AS "id",
           ts.teacher_id AS "teacherId",
           u.name AS "teacherName",
+          (SELECT STRING_AGG(DISTINCT cs.name, ', ') FROM teacher_class_subjects tcs
+             JOIN class_subjects cs ON cs.id = tcs.class_subject_id
+             WHERE tcs.teacher_id = u.id) AS "teacherSubject",
           ts.amount_due AS "amountDue",
           COALESCE(p.paid, 0)::int AS "paid",
           (ts.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
@@ -114,7 +129,7 @@ export class TeacherSalaryService {
           ts.note AS "note",
           ts.created_at AS "createdAt"
         FROM teacher_salaries ts
-        JOIN users u ON u.id = ts.teacher_id
+        JOIN teachers u ON u.id = ts.teacher_id
         LEFT JOIN (
           SELECT teacher_salary_id, SUM(amount) AS paid
           FROM salary_payments
@@ -162,12 +177,15 @@ export class TeacherSalaryService {
       `
       SELECT
         ts.id AS "id", ts.teacher_id AS "teacherId", u.name AS "teacherName",
+        (SELECT STRING_AGG(DISTINCT cs.name, ', ') FROM teacher_class_subjects tcs
+           JOIN class_subjects cs ON cs.id = tcs.class_subject_id
+           WHERE tcs.teacher_id = u.id) AS "teacherSubject",
         ts.amount_due AS "amountDue", COALESCE(p.paid, 0)::int AS "paid",
         (ts.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
         CASE WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID' WHEN COALESCE(p.paid, 0) >= ts.amount_due THEN 'PAID' ELSE 'PARTIAL' END AS "status",
         ts.period_month AS "periodMonth", ts.period_year AS "periodYear", ts.note AS "note", ts.created_at AS "createdAt"
       FROM teacher_salaries ts
-      JOIN users u ON u.id = ts.teacher_id
+      JOIN teachers u ON u.id = ts.teacher_id
       LEFT JOIN (SELECT teacher_salary_id, SUM(amount) AS paid FROM salary_payments WHERE status = 'active' GROUP BY teacher_salary_id) p ON p.teacher_salary_id = ts.id
       WHERE ts.id = $1
       `,

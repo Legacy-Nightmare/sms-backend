@@ -22,16 +22,14 @@ export class CreateTeacherSalaryDto {
 }
 
 // Generates one salary record per teacher for the given month — the usual
-// "run payroll for October" action, instead of one teacher at a time.
+// "run payroll for October" action, instead of one teacher at a time. Each
+// teacher's own `salary` (set on their roster profile) is used as the
+// amount due — teachers vary in pay, so there's no single shared amount.
 export class BulkGenerateSalaryDto {
   @IsArray()
   @ArrayMinSize(1)
   @IsInt({ each: true })
   teacherIds: number[];
-
-  @IsInt()
-  @Min(0)
-  amountDue: number;
 
   @IsInt()
   @Min(1)

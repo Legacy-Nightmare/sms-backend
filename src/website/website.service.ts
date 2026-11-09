@@ -10,6 +10,7 @@ import { CreateInstitutionDto } from './dto/create-institution.dto';
 import { UpdateInstitutionDto } from './dto/update-institution.dto';
 import { Notice } from '../notices/entities/notice.entity';
 import { Exam } from '../exams/entities/exam.entity';
+import { StorageService } from '../platform/storage/storage.service';
 
 @Injectable()
 export class WebsiteService {
@@ -30,6 +31,7 @@ export class WebsiteService {
     private readonly noticesRepo: Repository<Notice>,
     @InjectRepository(Exam)
     private readonly examsRepo: Repository<Exam>,
+    private readonly storage: StorageService,
   ) {}
 
   // The seed migration always inserts id=1, so a missing row here means the
@@ -112,9 +114,14 @@ export class WebsiteService {
   }
 
   async removeGalleryPhoto(id: number): Promise<void> {
-    const result = await this.galleryRepo.delete(id);
-    if (result.affected === 0) {
+    const photo = await this.galleryRepo.findOne({ where: { id } });
+    if (!photo) {
       throw new NotFoundException('Gallery photo not found');
+    }
+    await this.galleryRepo.delete(id);
+    const key = this.storage.keyFromPublicUrl(photo.imageUrl);
+    if (key) {
+      await this.storage.remove(key);
     }
   }
 
@@ -136,9 +143,14 @@ export class WebsiteService {
   }
 
   async removeDocument(id: number): Promise<void> {
-    const result = await this.documentsRepo.delete(id);
-    if (result.affected === 0) {
+    const document = await this.documentsRepo.findOne({ where: { id } });
+    if (!document) {
       throw new NotFoundException('Document not found');
+    }
+    await this.documentsRepo.delete(id);
+    const key = this.storage.keyFromPublicUrl(document.fileUrl);
+    if (key) {
+      await this.storage.remove(key);
     }
   }
 
