@@ -33,6 +33,18 @@ export class FeeTypesService {
     return feeType;
   }
 
+  // Used by the per-student multi-fee form, which bills against a fixed set
+  // of named fees (Admission Fee, Session Fee, ...) without requiring the
+  // admin to have pre-created each one via the fee-types settings dialog.
+  async findOrCreateByName(name: string): Promise<FeeType> {
+    const trimmed = name.trim();
+    const existing = await this.feeTypesRepo.findOne({ where: { name: trimmed } });
+    if (existing) {
+      return existing;
+    }
+    return this.feeTypesRepo.save(this.feeTypesRepo.create({ name: trimmed }));
+  }
+
   async upsertClassFee(dto: UpsertClassFeeDto): Promise<ClassFee> {
     await this.findById(dto.feeTypeId);
     const existing = await this.classFeesRepo.findOne({

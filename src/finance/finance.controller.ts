@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -13,7 +25,12 @@ import { ExpensesService } from './expenses.service';
 import { FinanceReportService } from './finance-report.service';
 import { CreateFeeTypeDto } from './dto/fee-type.dto';
 import { UpsertClassFeeDto } from './dto/class-fee.dto';
-import { CreateStudentFeeDto, BulkApplyFeeDto } from './dto/student-fee.dto';
+import {
+  CreateStudentFeeDto,
+  BulkApplyFeeDto,
+  CreateMultiStudentFeeDto,
+  UpdateStudentFeeDto,
+} from './dto/student-fee.dto';
 import { RecordPaymentDto, VoidRecordDto } from './dto/payment.dto';
 import { CreateTeacherSalaryDto, BulkGenerateSalaryDto } from './dto/teacher-salary.dto';
 import { CreateExpenseDto } from './dto/expense.dto';
@@ -71,6 +88,11 @@ export class FinanceController {
     return this.studentFeesService.bulkApply(dto, currentUserId(req));
   }
 
+  @Post('student-fees/multi')
+  createMultiStudentFee(@Body() dto: CreateMultiStudentFeeDto, @Req() req: Request) {
+    return this.studentFeesService.createMultiple(dto, currentUserId(req));
+  }
+
   @Get('student-fees')
   findStudentFees(
     @Query('studentId') studentId?: string,
@@ -93,6 +115,16 @@ export class FinanceController {
   @Get('student-fees/:id')
   findStudentFeeById(@Param('id', ParseIntPipe) id: number) {
     return this.studentFeesService.findById(id);
+  }
+
+  @Put('student-fees/:id')
+  updateStudentFee(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateStudentFeeDto) {
+    return this.studentFeesService.update(id, dto);
+  }
+
+  @Delete('student-fees/:id')
+  deleteStudentFee(@Param('id', ParseIntPipe) id: number) {
+    return this.studentFeesService.remove(id);
   }
 
   @Post('student-fees/:id/payments')

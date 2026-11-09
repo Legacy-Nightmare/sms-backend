@@ -10,7 +10,12 @@ import { StudentFee } from './entities/student-fee.entity';
 import { Payment } from './entities/payment.entity';
 import { FeeTypesService } from './fee-types.service';
 import { StudentsService } from '../students/students.service';
-import { CreateStudentFeeDto, BulkApplyFeeDto } from './dto/student-fee.dto';
+import {
+  CreateStudentFeeDto,
+  BulkApplyFeeDto,
+  CreateMultiStudentFeeDto,
+  UpdateStudentFeeDto,
+} from './dto/student-fee.dto';
 import { RecordPaymentDto, VoidRecordDto } from './dto/payment.dto';
 import { RecordStatus } from './entities/enums';
 
@@ -141,6 +146,98 @@ export class StudentFeesService {
       }
     }
     return { created, skipped };
+  }
+
+  // Bills a fixed set of named fees (Admission Fee, Session Fee, Exam Fee,
+  // ...) for one student in a single submission — the "Add fee" form. Each
+  // named fee is resolved/created on the fly via FeeTypesService, and a fee
+  // the student's already been billed for in this period is skipped rather
+  // than aborting the whole batch (same reasoning as bulkApply above).
+  async createMultiple(
+    dto: CreateMultiStudentFeeDto,
+    createdById: number,
+  ): Promise<{ created: Array<{ id: number; name: string; amount: number }>; skipped: string[] }> {
+    await this.studentsService.findById(dto.studentId);
+
+    // Row ids/amounts are returned (not just a count) so the caller can
+    // immediately record a payment against each one — the "Add fee" form's
+    // payment-status field (paid/partial/unpaid at billing time).
+    const created: Array<{ id: number; name: string; amount: number }> = [];
+    const skipped: string[] = [];
+    for (const entry of dto.fees) {
+      const feeType = await this.feeTypesService.findOrCreateByName(entry.name);
+      try {
+        const fee = await this.studentFeesRepo.save(
+          this.studentFeesRepo.create({
+            studentId: dto.studentId,
+            feeTypeId: feeType.id,
+            amountDue: entry.amount,
+            periodMonth: dto.periodMonth ?? null,
+            periodYear: dto.periodYear ?? null,
+            note: dto.note ?? null,
+            createdById,
+          }),
+        );
+        created.push({ id: fee.id, name: entry.name, amount: entry.amount });
+      } catch (err) {
+        if (this.isUniqueViolation(err)) {
+          skipped.push(entry.name);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return { created, skipped };
+  }
+
+  // Metadata-only edit (amount/period/note) — never touches payments.
+  // Rejected if the new amount would be less than what's already been paid,
+  // since that would make "remaining" negative.
+  async update(id: number, dto: UpdateStudentFeeDto): Promise<StudentFee> {
+    const fee = await this.studentFeesRepo.findOne({ where: { id } });
+    if (!fee) {
+      throw new NotFoundException('Student fee not found');
+    }
+
+    if (dto.amountDue !== undefined) {
+      const { sum } = await this.paymentsRepo
+        .createQueryBuilder('p')
+        .select('COALESCE(SUM(p.amount), 0)', 'sum')
+        .where('p.studentFeeId = :id AND p.status = :status', {
+          id,
+          status: RecordStatus.ACTIVE,
+        })
+        .getRawOne<{ sum: string }>();
+      const paidSoFar = parseInt(sum, 10);
+      if (dto.amountDue < paidSoFar) {
+        throw new BadRequestException(
+          `Can't set the amount due below ${paidSoFar} — that's already been paid`,
+        );
+      }
+      fee.amountDue = dto.amountDue;
+    }
+    if (dto.periodMonth !== undefined) fee.periodMonth = dto.periodMonth;
+    if (dto.periodYear !== undefined) fee.periodYear = dto.periodYear;
+    if (dto.note !== undefined) fee.note = dto.note;
+    return this.studentFeesRepo.save(fee);
+  }
+
+  // Payments are append-only (voided, never deleted — see Payment entity),
+  // and the FK from payments to student_fees cascades on delete, so a fee
+  // that's ever had a payment (even a voided one) can't be removed without
+  // silently destroying that audit trail. Only a never-paid bill can go.
+  async remove(id: number): Promise<void> {
+    const fee = await this.studentFeesRepo.findOne({ where: { id } });
+    if (!fee) {
+      throw new NotFoundException('Student fee not found');
+    }
+    const paymentCount = await this.paymentsRepo.count({ where: { studentFeeId: id } });
+    if (paymentCount > 0) {
+      throw new ConflictException(
+        'This fee has payment history and cannot be deleted — void the payment(s) first if the bill itself was wrong',
+      );
+    }
+    await this.studentFeesRepo.delete(id);
   }
 
   private isUniqueViolation(err: unknown): boolean {
