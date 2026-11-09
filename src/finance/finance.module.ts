@@ -14,13 +14,13 @@ import { ExpensesService } from './expenses.service';
 import { FinanceReportService } from './finance-report.service';
 import { FinanceController } from './finance.controller';
 import { StudentsModule } from '../students/students.module';
-import { UsersModule } from '../users/users.module';
+import { TeachersModule } from '../teachers/teachers.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([FeeType, ClassFee, StudentFee, Payment, TeacherSalary, SalaryPayment, Expense]),
     StudentsModule,
-    UsersModule,
+    TeachersModule,
   ],
   controllers: [FinanceController],
   providers: [FeeTypesService, StudentFeesService, TeacherSalaryService, ExpensesService, FinanceReportService],
