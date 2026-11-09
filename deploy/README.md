@@ -30,7 +30,7 @@ This repository contains the deployment setup for the SMS application.
 | Backend container | `sms-backend` |
 | RustFS bucket | `sms-uploads` |
 | RustFS internal endpoint | `http://rustfs:9000` |
-| Public asset base URL | `http://13.205.21.163` |
+| Public asset base URL | `https://aphsmsp.com` |
 
 **Important:** The IP address above is the current known deployment address. Replace it with the production domain/IP when deploying to a different server. Configure HTTPS before exposing the application publicly.
 
@@ -63,7 +63,7 @@ The backend stores application data in PostgreSQL and uploads profile images to 
 
 Student profile images are served through Nginx using URLs such as:
 
-`http://13.205.21.163/sms-uploads/students/example.png`
+`https://aphsmsp.com/sms-uploads/students/example.png`
 
 The frontend must not add `/api` to a complete image URL.
 
@@ -171,10 +171,10 @@ S3_ENDPOINT=http://rustfs:9000
 S3_BUCKET=sms-uploads
 
 # Public asset URL
-STORAGE_PUBLIC_URL_BASE=http://13.205.21.163
+STORAGE_PUBLIC_URL_BASE=https://aphsmsp.com
 
 # Frontend public API URL
-VITE_API_BASE_URL=http://13.205.21.163/api
+VITE_API_BASE_URL=https://aphsmsp.com/api
 ```
 
 These names are examples of the known configuration. Compare them with the variables actually referenced by your Compose file and application. Do not blindly replace a working production `.env` with this example.
@@ -264,7 +264,7 @@ http://rustfs:9000
 The public file URL uses the Nginx public base URL:
 
 ```text
-http://13.205.21.163/sms-uploads/students/<filename>
+https://aphsmsp.com/sms-uploads/students/<filename>
 ```
 
 ### Nginx configuration
@@ -337,7 +337,7 @@ The credentials must be available in the shell environment for the `-e` flags ab
 
 ```bash
 curl -I \
-  "http://13.205.21.163/sms-uploads/students/1793132736371-309137556.png"
+  "https://aphsmsp.com/sms-uploads/students/1793132736371-309137556.png"
 ```
 
 Expected response for an existing image:
@@ -790,7 +790,7 @@ docker logs --tail=100 sms-postgres
 
 ```bash
 curl -I \
-  "http://13.205.21.163/sms-uploads/students/1793132736371-309137556.png"
+  "https://aphsmsp.com/sms-uploads/students/1793132736371-309137556.png"
 ```
 
 Expected: `200 OK` for an existing public image.
@@ -877,7 +877,7 @@ http://13.205.21.163/apihttp:/13.205.21.163/sms-uploads/students/example.png
 Correct:
 
 ```text
-http://13.205.21.163/sms-uploads/students/example.png
+https://aphsmsp.com/sms-uploads/students/example.png
 ```
 
 Check `studentPhotoUrl()` in `src/lib/students-api.ts`. Absolute URLs must be returned unchanged; `/sms-uploads/...` paths must not have the API base URL prefixed.
