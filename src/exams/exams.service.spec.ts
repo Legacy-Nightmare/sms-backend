@@ -1,11 +1,16 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { ExamsService } from './exams.service';
+import { ExamsService, type MarksRequester } from './exams.service';
 import { Exam, ExamType } from './entities/exam.entity';
+import { Role } from '../common/enums/role.enum';
+
+const admin: MarksRequester = { userId: 1, role: Role.ADMIN };
 
 describe('ExamsService.enterMarks', () => {
   let service: ExamsService;
   let marksRepo: { manager: { transaction: jest.Mock } };
   let studentsService: { findAll: jest.Mock };
+  let teacherClassSubjectsRepo: { findOne: jest.Mock };
+  let usersService: { findById: jest.Mock };
 
   const exam = { id: 1, classId: 10, classEntity: { id: 10 } } as Exam;
   const students = [
@@ -24,9 +29,11 @@ describe('ExamsService.enterMarks', () => {
       manager: { transaction: jest.fn((cb) => cb({ upsert: jest.fn() })) },
     };
     studentsService = { findAll: jest.fn().mockResolvedValue(students) };
+    teacherClassSubjectsRepo = { findOne: jest.fn() };
     const notificationsService = { sendMail: jest.fn() };
     const academicsService = { findClassById: jest.fn() };
     const subjectsService = { findById: jest.fn() };
+    usersService = { findById: jest.fn() };
 
     // Constructed directly (no Nest TestingModule/DI) — this is a plain unit
     // test of the validation + transaction logic, not of Nest wiring, and
@@ -36,20 +43,26 @@ describe('ExamsService.enterMarks', () => {
       subjectsRepo as never,
       examsRepo as never,
       marksRepo as never,
+      teacherClassSubjectsRepo as never,
       studentsService as never,
       notificationsService as never,
       academicsService as never,
       subjectsService as never,
+      usersService as never,
     );
   });
 
   it('saves every row inside a transaction when the whole batch is valid', async () => {
-    const result = await service.enterMarks(1, {
-      entries: [
-        { studentId: 100, subjectId: 200, marksObtained: 90 },
-        { studentId: 101, subjectId: 200, marksObtained: 45 },
-      ],
-    });
+    const result = await service.enterMarks(
+      1,
+      {
+        entries: [
+          { studentId: 100, subjectId: 200, marksObtained: 90 },
+          { studentId: 101, subjectId: 200, marksObtained: 45 },
+        ],
+      },
+      admin,
+    );
 
     expect(result).toEqual({ saved: 2 });
     expect(marksRepo.manager.transaction).toHaveBeenCalledTimes(1);
@@ -57,9 +70,13 @@ describe('ExamsService.enterMarks', () => {
 
   it("rejects a mark above the subject's full marks, and writes nothing", async () => {
     await expect(
-      service.enterMarks(1, {
-        entries: [{ studentId: 100, subjectId: 200, marksObtained: 150 }],
-      }),
+      service.enterMarks(
+        1,
+        {
+          entries: [{ studentId: 100, subjectId: 200, marksObtained: 150 }],
+        },
+        admin,
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(marksRepo.manager.transaction).not.toHaveBeenCalled();
@@ -67,9 +84,13 @@ describe('ExamsService.enterMarks', () => {
 
   it("rejects a student who is not in this exam's class", async () => {
     await expect(
-      service.enterMarks(1, {
-        entries: [{ studentId: 999, subjectId: 200, marksObtained: 10 }],
-      }),
+      service.enterMarks(
+        1,
+        {
+          entries: [{ studentId: 999, subjectId: 200, marksObtained: 10 }],
+        },
+        admin,
+      ),
     ).rejects.toMatchObject({
       response: {
         errors: [
@@ -85,9 +106,13 @@ describe('ExamsService.enterMarks', () => {
 
   it("rejects a subject that does not belong to this exam's class", async () => {
     await expect(
-      service.enterMarks(1, {
-        entries: [{ studentId: 100, subjectId: 999, marksObtained: 10 }],
-      }),
+      service.enterMarks(
+        1,
+        {
+          entries: [{ studentId: 100, subjectId: 999, marksObtained: 10 }],
+        },
+        admin,
+      ),
     ).rejects.toMatchObject({
       response: {
         errors: [
@@ -103,12 +128,16 @@ describe('ExamsService.enterMarks', () => {
 
   it('collects every invalid row in one response instead of failing on the first', async () => {
     try {
-      await service.enterMarks(1, {
-        entries: [
-          { studentId: 999, subjectId: 200, marksObtained: 10 },
-          { studentId: 100, subjectId: 200, marksObtained: 150 },
-        ],
-      });
+      await service.enterMarks(
+        1,
+        {
+          entries: [
+            { studentId: 999, subjectId: 200, marksObtained: 10 },
+            { studentId: 100, subjectId: 200, marksObtained: 150 },
+          ],
+        },
+        admin,
+      );
       fail('expected enterMarks to throw');
     } catch (err) {
       const response = (err as BadRequestException).getResponse() as {
@@ -116,6 +145,53 @@ describe('ExamsService.enterMarks', () => {
       };
       expect(response.errors).toHaveLength(2);
     }
+  });
+
+  it('rejects a teacher account with no linked teacher profile', async () => {
+    usersService.findById.mockResolvedValue({ id: 5, teacherId: null });
+    const teacher: MarksRequester = { userId: 5, role: Role.TEACHER };
+
+    await expect(
+      service.enterMarks(
+        1,
+        { entries: [{ studentId: 100, subjectId: 200, marksObtained: 90 }] },
+        teacher,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(marksRepo.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a teacher entering marks for a subject they are not assigned to', async () => {
+    usersService.findById.mockResolvedValue({ id: 5, teacherId: 50 });
+    teacherClassSubjectsRepo.findOne.mockResolvedValue(null);
+    const teacher: MarksRequester = { userId: 5, role: Role.TEACHER };
+
+    await expect(
+      service.enterMarks(
+        1,
+        { entries: [{ studentId: 100, subjectId: 200, marksObtained: 90 }] },
+        teacher,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(teacherClassSubjectsRepo.findOne).toHaveBeenCalledWith({
+      where: { teacherId: 50, classSubjectId: 200 },
+    });
+    expect(marksRepo.manager.transaction).not.toHaveBeenCalled();
+  });
+
+  it('allows a teacher entering marks for a subject they are assigned to', async () => {
+    usersService.findById.mockResolvedValue({ id: 5, teacherId: 50 });
+    teacherClassSubjectsRepo.findOne.mockResolvedValue({ id: 1, teacherId: 50, classSubjectId: 200 });
+    const teacher: MarksRequester = { userId: 5, role: Role.TEACHER };
+
+    const result = await service.enterMarks(
+      1,
+      { entries: [{ studentId: 100, subjectId: 200, marksObtained: 90 }] },
+      teacher,
+    );
+
+    expect(result).toEqual({ saved: 1 });
+    expect(marksRepo.manager.transaction).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -152,21 +228,25 @@ describe('ExamsService.getCombinedResult', () => {
     const subjectsRepo = { find: jest.fn().mockResolvedValue(subjects) };
     const examsRepo = { findOne: opts.examsFindOne };
     const marksRepo = { find: opts.marksFind };
+    const teacherClassSubjectsRepo = { findOne: jest.fn() };
     const studentsService = { findById: jest.fn().mockResolvedValue(student) };
     const notificationsService = { sendMail: jest.fn() };
     const academicsService = {
       findClassById: jest.fn().mockResolvedValue(classEntity),
     };
     const subjectsService = { findById: jest.fn() };
+    const usersService = { findById: jest.fn() };
 
     return new ExamsService(
       subjectsRepo as never,
       examsRepo as never,
       marksRepo as never,
+      teacherClassSubjectsRepo as never,
       studentsService as never,
       notificationsService as never,
       academicsService as never,
       subjectsService as never,
+      usersService as never,
     );
   }
 

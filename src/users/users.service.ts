@@ -15,6 +15,7 @@ export interface CreateUserInput {
   email: string;
   password: string;
   role: Role;
+  teacherId?: number;
 }
 
 @Injectable()
@@ -35,6 +36,7 @@ export class UsersService {
       email: input.email,
       passwordHash,
       role: input.role,
+      teacherId: input.teacherId ?? null,
     });
     const saved = await this.usersRepo.save(user);
     // save() returns the same in-memory object we built above, passwordHash
@@ -93,9 +95,12 @@ export class UsersService {
     await this.usersRepo.save(user);
   }
 
-  async updateRole(id: number, role: Role): Promise<User> {
+  async updateRole(id: number, role: Role, teacherId?: number | null): Promise<User> {
     const user = await this.findById(id);
     user.role = role;
+    if (teacherId !== undefined) {
+      user.teacherId = teacherId;
+    }
     return this.usersRepo.save(user);
   }
 

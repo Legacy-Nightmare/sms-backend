@@ -23,6 +23,12 @@ export class User {
   @Column({ type: 'enum', enum: Role, default: Role.TEACHER })
   role: Role;
 
+  // Links a teacher-role login to its roster entry in `teachers`, so the
+  // backend knows which class/subject assignments this account actually
+  // has. Meaningless for admin/finance accounts — stays null for those.
+  @Column({ name: 'teacher_id', nullable: true })
+  teacherId: number | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

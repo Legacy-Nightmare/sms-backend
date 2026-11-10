@@ -8,10 +8,12 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ExamsService } from './exams.service';
+import type { Request } from 'express';
+import { ExamsService, type MarksRequester } from './exams.service';
 import { CreateSubjectDto } from './dto/create-subject.dto';
 import { UpdateSubjectDto } from './dto/update-subject.dto';
 import { CreateExamDto } from './dto/create-exam.dto';
@@ -22,10 +24,15 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 
+// Class-level default of ADMIN+TEACHER keeps finance accounts (and any
+// future role) out of the whole exams/results surface by default — finance
+// has its own module and no legitimate reason to read student marks.
+// Admin-only routes below override this with their own @Roles.
 @ApiTags('exams')
 @ApiBearerAuth()
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN, Role.TEACHER)
 export class ExamsController {
   constructor(private readonly examsService: ExamsService) {}
 
@@ -95,25 +102,26 @@ export class ExamsController {
   }
 
   @Post('exams/:id/marks')
-  @Roles(Role.ADMIN, Role.TEACHER)
   enterMarks(
     @Param('id', ParseIntPipe) examId: number,
     @Body() dto: EnterMarksDto,
+    @Req() req: Request,
   ) {
-    return this.examsService.enterMarks(examId, dto);
+    return this.examsService.enterMarks(examId, dto, req.user as MarksRequester);
   }
 
   @Get('exams/:id/marks-sheet')
-  @Roles(Role.ADMIN, Role.TEACHER)
   getMarksSheet(
     @Param('id', ParseIntPipe) examId: number,
     @Query('subjectId', ParseIntPipe) subjectId: number,
-    @Query('sectionId') sectionId?: string,
+    @Query('sectionId') sectionId: string | undefined,
+    @Req() req: Request,
   ) {
     return this.examsService.getMarksSheet(
       examId,
       subjectId,
       sectionId ? parseInt(sectionId, 10) : undefined,
+      req.user as MarksRequester,
     );
   }
 

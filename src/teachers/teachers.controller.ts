@@ -29,10 +29,16 @@ const TEACHER_PHOTOS_PREFIX = 'teachers';
 const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png'];
 const MAX_PHOTO_SIZE = 2 * 1024 * 1024;
 
+// Class-level default of ADMIN+FINANCE — finance legitimately needs to
+// read the roster (names, salary) to run payroll; a plain TEACHER account
+// must not be able to list every other teacher's salary and NID, so that
+// role is deliberately left out of the default and only admin-only routes
+// below exist for anything mutating.
 @ApiTags('teachers')
 @ApiBearerAuth()
 @Controller('teachers')
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN, Role.FINANCE)
 export class TeachersController {
   constructor(
     private readonly teachersService: TeachersService,

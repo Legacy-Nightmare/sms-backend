@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { Repository } from 'typeorm';
 import { Subject } from './entities/subject.entity';
 import { Exam, ExamType } from './entities/exam.entity';
 import { Mark } from './entities/mark.entity';
+import { TeacherClassSubject } from '../teachers/entities/teacher-class-subject.entity';
 import { CreateSubjectDto } from './dto/create-subject.dto';
 import { UpdateSubjectDto } from './dto/update-subject.dto';
 import { CreateExamDto } from './dto/create-exam.dto';
@@ -19,6 +21,15 @@ import { StudentsService } from '../students/students.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AcademicsService } from '../academics/academics.service';
 import { SubjectsService } from '../subjects/subjects.service';
+import { UsersService } from '../users/users.service';
+import { Role } from '../common/enums/role.enum';
+
+// Identifies the caller for the assignment check below — admins bypass it
+// entirely, so only role+userId are needed, not the full user record.
+export interface MarksRequester {
+  userId: number;
+  role: Role;
+}
 
 export interface SubjectResult {
   subjectId: number;
@@ -75,11 +86,39 @@ export class ExamsService {
     private readonly examsRepo: Repository<Exam>,
     @InjectRepository(Mark)
     private readonly marksRepo: Repository<Mark>,
+    @InjectRepository(TeacherClassSubject)
+    private readonly teacherClassSubjectsRepo: Repository<TeacherClassSubject>,
     private readonly studentsService: StudentsService,
     private readonly notificationsService: NotificationsService,
     private readonly academicsService: AcademicsService,
     private readonly subjectsService: SubjectsService,
+    private readonly usersService: UsersService,
   ) {}
+
+  // Admins can enter marks for anything; a teacher account can only enter
+  // marks for a class_subjects row they're actually assigned to (via
+  // teacher_class_subjects) — never any other class or subject, even ones
+  // on a class they do teach some other subject in.
+  private async assertTeacherAssignedToSubject(
+    requester: MarksRequester,
+    classSubjectId: number,
+  ): Promise<void> {
+    if (requester.role !== Role.TEACHER) {
+      return;
+    }
+    const user = await this.usersService.findById(requester.userId);
+    if (!user.teacherId) {
+      throw new ForbiddenException(
+        'Your account is not linked to a teacher profile — ask an admin to link it under Staff accounts',
+      );
+    }
+    const assignment = await this.teacherClassSubjectsRepo.findOne({
+      where: { teacherId: user.teacherId, classSubjectId },
+    });
+    if (!assignment) {
+      throw new ForbiddenException('You are not assigned to this class/subject');
+    }
+  }
 
   async createSubject(dto: CreateSubjectDto): Promise<Subject> {
     const existing = await this.subjectsRepo.findOne({
@@ -198,6 +237,7 @@ export class ExamsService {
   async enterMarks(
     examId: number,
     dto: EnterMarksDto,
+    requester: MarksRequester,
   ): Promise<{ saved: number }> {
     const exam = await this.findExamById(examId);
 
@@ -207,6 +247,14 @@ export class ExamsService {
     ]);
     const studentIds = new Set(classStudents.map((s) => s.id));
     const subjectsById = new Map(classSubjects.map((s) => [s.id, s]));
+
+    // One check per distinct subject in the batch, not per entry — a
+    // teacher submits a whole subject's grid at once, so every entry
+    // normally shares the same subjectId anyway.
+    const distinctSubjectIds = new Set(dto.entries.map((e) => e.subjectId));
+    for (const classSubjectId of distinctSubjectIds) {
+      await this.assertTeacherAssignedToSubject(requester, classSubjectId);
+    }
 
     const errors: Array<{
       studentId: number;
@@ -271,7 +319,8 @@ export class ExamsService {
   async getMarksSheet(
     examId: number,
     subjectId: number,
-    sectionId?: number,
+    sectionId: number | undefined,
+    requester: MarksRequester,
   ): Promise<
     Array<{
       studentId: number;
@@ -281,6 +330,7 @@ export class ExamsService {
       marksObtained: number | null;
     }>
   > {
+    await this.assertTeacherAssignedToSubject(requester, subjectId);
     const exam = await this.findExamById(examId);
     const subject = await this.subjectsRepo.findOne({
       where: { id: subjectId, classId: exam.classId },

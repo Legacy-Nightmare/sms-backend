@@ -27,7 +27,7 @@ export class NoticesController {
   constructor(private readonly noticesService: NoticesService) {}
 
   @Post()
-  @Roles(Role.ADMIN, Role.TEACHER)
+  @Roles(Role.ADMIN)
   create(@Body() dto: CreateNoticeDto, @Req() req: Request) {
     const user = req.user as { userId: number };
     return this.noticesService.create(dto, user.userId);
@@ -39,7 +39,7 @@ export class NoticesController {
   }
 
   @Put(':id')
-  @Roles(Role.ADMIN, Role.TEACHER)
+  @Roles(Role.ADMIN)
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: CreateNoticeDto) {
     return this.noticesService.update(id, dto);
   }
@@ -51,19 +51,19 @@ export class NoticesController {
   }
 
   @Post(':id/publish')
-  @Roles(Role.ADMIN, Role.TEACHER)
+  @Roles(Role.ADMIN)
   publish(@Param('id', ParseIntPipe) id: number) {
     return this.noticesService.publish(id);
   }
 
   @Post(':id/publish-to-website')
-  @Roles(Role.ADMIN, Role.TEACHER)
+  @Roles(Role.ADMIN)
   publishToWebsite(@Param('id', ParseIntPipe) id: number) {
     return this.noticesService.publishToWebsite(id);
   }
 
   @Post(':id/unpublish-from-website')
-  @Roles(Role.ADMIN, Role.TEACHER)
+  @Roles(Role.ADMIN)
   unpublishFromWebsite(@Param('id', ParseIntPipe) id: number) {
     return this.noticesService.unpublishFromWebsite(id);
   }
