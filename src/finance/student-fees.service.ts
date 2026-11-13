@@ -24,6 +24,7 @@ export interface StudentFeeRow {
   studentId: number;
   studentName: string;
   studentCode: string;
+  roll: number;
   classId: number;
   className: string;
   sectionId: number;
@@ -327,6 +328,7 @@ export class StudentFeesService {
           sf.student_id AS "studentId",
           s.name AS "studentName",
           s.code AS "studentCode",
+          s.roll AS "roll",
           s.class_id AS "classId",
           c.name AS "className",
           s.section_id AS "sectionId",
@@ -387,7 +389,9 @@ export class StudentFeesService {
       `
       SELECT
         sf.id AS "id", sf.student_id AS "studentId", s.name AS "studentName", s.code AS "studentCode",
-        s.class_id AS "classId", c.name AS "className", sf.fee_type_id AS "feeTypeId", ft.name AS "feeTypeName",
+        s.roll AS "roll", s.class_id AS "classId", c.name AS "className",
+        s.section_id AS "sectionId", sec.name AS "sectionName",
+        sf.fee_type_id AS "feeTypeId", ft.name AS "feeTypeName",
         sf.amount_due AS "amountDue", COALESCE(p.paid, 0)::int AS "paid",
         (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
         CASE WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID' WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID' ELSE 'PARTIAL' END AS "status",
@@ -395,6 +399,7 @@ export class StudentFeesService {
       FROM student_fees sf
       JOIN students s ON s.id = sf.student_id
       JOIN classes c ON c.id = s.class_id
+      JOIN sections sec ON sec.id = s.section_id
       JOIN fee_types ft ON ft.id = sf.fee_type_id
       LEFT JOIN (SELECT student_fee_id, SUM(amount) AS paid FROM payments WHERE status = 'active' GROUP BY student_fee_id) p ON p.student_fee_id = sf.id
       WHERE sf.id = $1
