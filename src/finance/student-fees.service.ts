@@ -26,6 +26,8 @@ export interface StudentFeeRow {
   studentCode: string;
   classId: number;
   className: string;
+  sectionId: number;
+  sectionName: string;
   feeTypeId: number;
   feeTypeName: string;
   amountDue: number;
@@ -41,10 +43,20 @@ export interface StudentFeeRow {
 export interface StudentFeeFilters {
   studentId?: number;
   classId?: number;
+  sectionId?: number;
   feeTypeId?: number;
   status?: 'PAID' | 'PARTIAL' | 'UNPAID';
+  search?: string;
+  from?: string;
+  to?: string;
   page?: number;
   pageSize?: number;
+}
+
+export interface StudentFeeSummary {
+  totalBilled: number;
+  collected: number;
+  outstanding: number;
 }
 
 // Payment with receivedBy flattened to just a name — never return the full
@@ -254,7 +266,7 @@ export class StudentFeesService {
   // pagination both happen in Postgres, not after fetching everything.
   async findAll(
     filters: StudentFeeFilters,
-  ): Promise<{ rows: StudentFeeRow[]; total: number }> {
+  ): Promise<{ rows: StudentFeeRow[]; total: number; summary: StudentFeeSummary }> {
     const page = filters.page ?? 1;
     const pageSize = Math.min(filters.pageSize ?? 50, 200);
 
@@ -266,12 +278,47 @@ export class StudentFeesService {
     };
     if (filters.studentId) push('sf.student_id = ?', filters.studentId);
     if (filters.classId) push('s.class_id = ?', filters.classId);
+    if (filters.sectionId) push('s.section_id = ?', filters.sectionId);
     if (filters.feeTypeId) push('sf.fee_type_id = ?', filters.feeTypeId);
+    if (filters.from) push('sf.created_at::date >= ?', filters.from);
+    if (filters.to) push('sf.created_at::date <= ?', filters.to);
+    if (filters.search) {
+      params.push(`%${filters.search}%`);
+      conditions.push(`(s.name ILIKE $${params.length} OR s.code ILIKE $${params.length})`);
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const statusHaving = filters.status
       ? `WHERE status = '${filters.status}'` // enum-like value from our own code, not user-concatenated SQL
       : '';
+
+    // Shared by the page query, the count, and the summary totals below — a
+    // bare base (no SELECT, no closing alias) so each caller wraps it with
+    // only the aggregation it needs, over identical filters.
+    const base = `
+      FROM student_fees sf
+      JOIN students s ON s.id = sf.student_id
+      JOIN classes c ON c.id = s.class_id
+      JOIN sections sec ON sec.id = s.section_id
+      JOIN fee_types ft ON ft.id = sf.fee_type_id
+      LEFT JOIN (
+        SELECT student_fee_id, SUM(amount) AS paid
+        FROM payments
+        WHERE status = 'active'
+        GROUP BY student_fee_id
+      ) p ON p.student_fee_id = sf.id
+      ${where}
+    `;
+    const computedColumns = `
+      sf.amount_due AS "amountDue",
+      COALESCE(p.paid, 0)::int AS "paid",
+      (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
+      CASE
+        WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID'
+        WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID'
+        ELSE 'PARTIAL'
+      END AS "status"
+    `;
 
     const sql = `
       SELECT * FROM (
@@ -282,31 +329,16 @@ export class StudentFeesService {
           s.code AS "studentCode",
           s.class_id AS "classId",
           c.name AS "className",
+          s.section_id AS "sectionId",
+          sec.name AS "sectionName",
           sf.fee_type_id AS "feeTypeId",
           ft.name AS "feeTypeName",
-          sf.amount_due AS "amountDue",
-          COALESCE(p.paid, 0)::int AS "paid",
-          (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
-          CASE
-            WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID'
-            WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID'
-            ELSE 'PARTIAL'
-          END AS "status",
+          ${computedColumns},
           sf.period_month AS "periodMonth",
           sf.period_year AS "periodYear",
           sf.note AS "note",
           sf.created_at AS "createdAt"
-        FROM student_fees sf
-        JOIN students s ON s.id = sf.student_id
-        JOIN classes c ON c.id = s.class_id
-        JOIN fee_types ft ON ft.id = sf.fee_type_id
-        LEFT JOIN (
-          SELECT student_fee_id, SUM(amount) AS paid
-          FROM payments
-          WHERE status = 'active'
-          GROUP BY student_fee_id
-        ) p ON p.student_fee_id = sf.id
-        ${where}
+        ${base}
       ) x
       ${statusHaving}
       ORDER BY "createdAt" DESC
@@ -314,38 +346,38 @@ export class StudentFeesService {
     `;
     const countSql = `
       SELECT COUNT(*)::int AS count FROM (
-        SELECT
-          sf.id,
-          sf.amount_due,
-          COALESCE(p.paid, 0) AS paid,
-          CASE
-            WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID'
-            WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID'
-            ELSE 'PARTIAL'
-          END AS status
-        FROM student_fees sf
-        JOIN students s ON s.id = sf.student_id
-        LEFT JOIN (
-          SELECT student_fee_id, SUM(amount) AS paid
-          FROM payments
-          WHERE status = 'active'
-          GROUP BY student_fee_id
-        ) p ON p.student_fee_id = sf.id
-        ${where}
+        SELECT sf.id, ${computedColumns}
+        ${base}
+      ) x
+      ${statusHaving}
+    `;
+    const summarySql = `
+      SELECT
+        COALESCE(SUM("amountDue"), 0)::int AS "totalBilled",
+        COALESCE(SUM("paid"), 0)::int AS "collected",
+        COALESCE(SUM("remaining"), 0)::int AS "outstanding"
+      FROM (
+        SELECT sf.id, ${computedColumns}
+        ${base}
       ) x
       ${statusHaving}
     `;
 
-    const [rows, countResult] = await Promise.all([
+    const [rows, countResult, summaryResult] = await Promise.all([
       this.studentFeesRepo.manager.query(sql, [
         ...params,
         pageSize,
         (page - 1) * pageSize,
       ]),
       this.studentFeesRepo.manager.query(countSql, params),
+      this.studentFeesRepo.manager.query(summarySql, params),
     ]);
 
-    return { rows, total: countResult[0]?.count ?? 0 };
+    return {
+      rows,
+      total: countResult[0]?.count ?? 0,
+      summary: summaryResult[0] ?? { totalBilled: 0, collected: 0, outstanding: 0 },
+    };
   }
 
   async findById(

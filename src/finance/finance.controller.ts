@@ -97,16 +97,24 @@ export class FinanceController {
   findStudentFees(
     @Query('studentId') studentId?: string,
     @Query('classId') classId?: string,
+    @Query('sectionId') sectionId?: string,
     @Query('feeTypeId') feeTypeId?: string,
     @Query('status') status?: 'PAID' | 'PARTIAL' | 'UNPAID',
+    @Query('search') search?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
     return this.studentFeesService.findAll({
       studentId: studentId ? parseInt(studentId, 10) : undefined,
       classId: classId ? parseInt(classId, 10) : undefined,
+      sectionId: sectionId ? parseInt(sectionId, 10) : undefined,
       feeTypeId: feeTypeId ? parseInt(feeTypeId, 10) : undefined,
       status,
+      search: search || undefined,
+      from: from || undefined,
+      to: to || undefined,
       page: page ? parseInt(page, 10) : undefined,
       pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
     });
