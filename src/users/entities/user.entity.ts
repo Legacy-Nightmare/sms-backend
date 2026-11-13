@@ -29,6 +29,11 @@ export class User {
   @Column({ name: 'teacher_id', nullable: true })
   teacherId: number | null;
 
+  // Account-level login gate — separate from a teacher's roster employment
+  // status (teachers.isActive). A deactivated account can't sign in at all.
+  @Column({ name: 'is_active', default: true })
+  isActive: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

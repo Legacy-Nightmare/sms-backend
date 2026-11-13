@@ -104,6 +104,12 @@ export class UsersService {
     return this.usersRepo.save(user);
   }
 
+  async setActive(id: number, isActive: boolean): Promise<User> {
+    const user = await this.findById(id);
+    user.isActive = isActive;
+    return this.usersRepo.save(user);
+  }
+
   async remove(id: number): Promise<void> {
     const result = await this.usersRepo.delete(id);
     if (result.affected === 0) {

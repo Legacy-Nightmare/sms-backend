@@ -15,6 +15,14 @@ export class AuthService {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException('Invalid email or password');
     }
+    // Checked only after the password matches — an inactive account isn't
+    // distinguishable from a wrong password to someone who doesn't already
+    // know the real one.
+    if (!user.isActive) {
+      throw new UnauthorizedException(
+        'Your account has been deactivated. Contact the administrator to reactivate it.',
+      );
+    }
 
     const payload = { sub: user.id, email: user.email, role: user.role };
     return {

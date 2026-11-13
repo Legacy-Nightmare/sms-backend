@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { SetUserActiveDto } from './dto/set-user-active.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -39,6 +40,11 @@ export class UsersController {
   @Put(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
     return this.usersService.updateRole(id, dto.role, dto.teacherId);
+  }
+
+  @Put(':id/active')
+  setActive(@Param('id', ParseIntPipe) id: number, @Body() dto: SetUserActiveDto) {
+    return this.usersService.setActive(id, dto.isActive);
   }
 
   @Delete(':id')
