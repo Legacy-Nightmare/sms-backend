@@ -198,27 +198,34 @@ export class ExamsService {
     await this.examsRepo.update(examId, {
       name: dto.name ?? exam.name,
       type: dto.type ?? exam.type,
+      sectionId: dto.sectionId !== undefined ? dto.sectionId : exam.sectionId,
       examDate: dto.examDate ?? exam.examDate,
       academicYear: dto.academicYear ?? exam.academicYear,
     });
     return this.findExamById(examId);
   }
 
-  findExams(classId?: number, academicYear?: string): Promise<Exam[]> {
-    return this.examsRepo.find({
-      where: {
-        ...(classId ? { classId } : {}),
-        ...(academicYear ? { academicYear } : {}),
-      },
-      relations: { classEntity: true },
-      order: { createdAt: 'DESC' },
-    });
+  // sectionId filters inclusively: an exam explicitly scoped to that
+  // section matches, and so does an "all sections" exam (sectionId null) —
+  // it covers every section's students, this one included.
+  findExams(classId?: number, academicYear?: string, sectionId?: number): Promise<Exam[]> {
+    const qb = this.examsRepo
+      .createQueryBuilder('exam')
+      .leftJoinAndSelect('exam.classEntity', 'classEntity')
+      .leftJoinAndSelect('exam.section', 'section')
+      .orderBy('exam.createdAt', 'DESC');
+    if (classId) qb.andWhere('exam.classId = :classId', { classId });
+    if (academicYear) qb.andWhere('exam.academicYear = :academicYear', { academicYear });
+    if (sectionId) {
+      qb.andWhere('(exam.sectionId = :sectionId OR exam.sectionId IS NULL)', { sectionId });
+    }
+    return qb.getMany();
   }
 
   async findExamById(id: number): Promise<Exam> {
     const exam = await this.examsRepo.findOne({
       where: { id },
-      relations: { classEntity: true },
+      relations: { classEntity: true, section: true },
     });
     if (!exam) {
       throw new NotFoundException('Exam not found');
@@ -242,7 +249,10 @@ export class ExamsService {
     const exam = await this.findExamById(examId);
 
     const [classStudents, classSubjects] = await Promise.all([
-      this.studentsService.findAll({ classId: exam.classId }),
+      this.studentsService.findAll({
+        classId: exam.classId,
+        sectionId: exam.sectionId ?? undefined,
+      }),
       this.subjectsRepo.find({ where: { classId: exam.classId } }),
     ]);
     const studentIds = new Set(classStudents.map((s) => s.id));
@@ -339,9 +349,12 @@ export class ExamsService {
       throw new NotFoundException("Subject not found for this exam's class");
     }
 
+    // An exam locked to one section always uses that section, regardless of
+    // what's requested — the caller-supplied sectionId only matters for an
+    // "all sections" exam, as an optional narrowing filter.
     const students = await this.studentsService.findAll({
       classId: exam.classId,
-      sectionId,
+      sectionId: exam.sectionId ?? sectionId,
     });
     const marks = await this.marksRepo.find({ where: { examId, subjectId } });
     const markByStudent = new Map(
@@ -400,6 +413,7 @@ export class ExamsService {
     const exam = await this.findExamById(examId);
     const students = await this.studentsService.findAll({
       classId: exam.classId,
+      sectionId: exam.sectionId ?? undefined,
     });
     return Promise.all(
       students.map((s) => this.getStudentResult(examId, s.id)),

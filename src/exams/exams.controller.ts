@@ -89,10 +89,12 @@ export class ExamsController {
   findExams(
     @Query('classId') classId?: string,
     @Query('academicYear') academicYear?: string,
+    @Query('sectionId') sectionId?: string,
   ) {
     return this.examsService.findExams(
       classId ? parseInt(classId, 10) : undefined,
       academicYear,
+      sectionId ? parseInt(sectionId, 10) : undefined,
     );
   }
 

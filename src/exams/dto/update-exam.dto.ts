@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, ValidateIf } from 'class-validator';
 import { ExamType } from '../entities/exam.entity';
 
 // classId is deliberately not editable here — changing a published or
@@ -12,6 +12,13 @@ export class UpdateExamDto {
   @IsOptional()
   @IsEnum(ExamType)
   type?: ExamType;
+
+  // Explicit `null` sets it back to "all sections"; omit the field entirely
+  // to leave it unchanged.
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsInt()
+  sectionId?: number | null;
 
   @IsOptional()
   @IsString()

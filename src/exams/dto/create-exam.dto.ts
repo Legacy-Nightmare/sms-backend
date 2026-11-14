@@ -11,6 +11,11 @@ export class CreateExamDto {
   @IsInt()
   classId: number;
 
+  // Omit for "all sections of the class" (the default).
+  @IsOptional()
+  @IsInt()
+  sectionId?: number;
+
   @IsOptional()
   @IsString()
   examDate?: string;

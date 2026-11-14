@@ -7,6 +7,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { ClassEntity } from '../../academics/entities/class.entity';
+import { Section } from '../../academics/entities/section.entity';
 
 // FINAL also covers one-off exams with no tutorial counterpart (e.g.
 // "Midterm") — they still grade standalone via getStudentResult, and simply
@@ -35,6 +36,15 @@ export class Exam {
 
   @Column({ name: 'class_id' })
   classId: number;
+
+  // Null = every section of the class (the default, "All"); a specific id
+  // restricts marks entry and results to just that section's students.
+  @ManyToOne(() => Section, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'section_id' })
+  section: Section | null;
+
+  @Column({ name: 'section_id', nullable: true })
+  sectionId: number | null;
 
   @Column({ name: 'exam_date', type: 'date', nullable: true })
   examDate: string;
