@@ -78,6 +78,15 @@ export class FinanceController {
 
   // ---- student fees + payments ----
 
+  // Backs the Exam Fee picker in the billing dialogs — never ExamsController,
+  // which keeps Role.FINANCE out of the marks/results surface entirely.
+  @Get('exams')
+  findExamsForBilling(@Query('classId') classId?: string) {
+    return this.studentFeesService.listExamsForBilling(
+      classId ? parseInt(classId, 10) : undefined,
+    );
+  }
+
   @Post('student-fees')
   createStudentFee(@Body() dto: CreateStudentFeeDto, @Req() req: Request) {
     return this.studentFeesService.create(dto, currentUserId(req));

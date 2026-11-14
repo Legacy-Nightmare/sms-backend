@@ -25,6 +25,12 @@ export class CreateStudentFeeDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  // Required (checked in the service) when the fee type resolves to "Exam
+  // Fee".
+  @IsOptional()
+  @IsInt()
+  examId?: number;
 }
 
 // All fields optional — only the ones present in the request body are
@@ -62,6 +68,12 @@ export class FeeAmountDto {
   @IsInt()
   @Min(1)
   amount: number;
+
+  // Required (checked in the service, not here, since it only applies when
+  // `name` is "Exam Fee") — which exam this bill is for.
+  @IsOptional()
+  @IsInt()
+  examId?: number;
 }
 
 // Bills several named fees for one student in a single call — the "Add fee"
@@ -120,4 +132,8 @@ export class BulkApplyFeeDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @IsOptional()
+  @IsInt()
+  examId?: number;
 }

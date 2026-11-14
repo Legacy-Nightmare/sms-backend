@@ -2,6 +2,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 import { Student } from '../../students/entities/student.entity';
 import { FeeType } from './fee-type.entity';
 import { User } from '../../users/entities/user.entity';
+import { Exam } from '../../exams/entities/exam.entity';
 
 // One billed fee for one student — e.g. "Rahim owes 1500 BDT for Monthly
 // Tuition, Oct 2026". Amount is frozen at billing time (not re-derived from
@@ -39,6 +40,16 @@ export class StudentFee {
 
   @Column({ nullable: true })
   note: string | null;
+
+  // Only set for Exam Fee bills — which exam the fee is for, so the admit
+  // card (only issuable once this fee is fully paid) can show the exam's
+  // own name rather than deriving a label from period month/year.
+  @ManyToOne(() => Exam, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'exam_id' })
+  exam: Exam | null;
+
+  @Column({ name: 'exam_id', nullable: true })
+  examId: number | null;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'created_by' })

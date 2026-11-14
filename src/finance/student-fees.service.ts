@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { StudentFee } from './entities/student-fee.entity';
 import { Payment } from './entities/payment.entity';
+import { Exam } from '../exams/entities/exam.entity';
 import { FeeTypesService } from './fee-types.service';
 import { StudentsService } from '../students/students.service';
 import {
@@ -38,6 +39,8 @@ export interface StudentFeeRow {
   periodMonth: number | null;
   periodYear: number | null;
   note: string | null;
+  examId: number | null;
+  examName: string | null;
   createdAt: Date;
 }
 
@@ -90,16 +93,35 @@ export class StudentFeesService {
     private readonly studentFeesRepo: Repository<StudentFee>,
     @InjectRepository(Payment)
     private readonly paymentsRepo: Repository<Payment>,
+    @InjectRepository(Exam)
+    private readonly examsRepo: Repository<Exam>,
     private readonly feeTypesService: FeeTypesService,
     private readonly studentsService: StudentsService,
   ) {}
+
+  // Exam Fee bills must name the exam they're for (the admit card shows its
+  // name); every other fee type ignores whatever examId it was sent.
+  private async resolveExamId(feeTypeName: string, examId: number | undefined): Promise<number | null> {
+    if (feeTypeName.trim().toLowerCase() !== 'exam fee') {
+      return null;
+    }
+    if (!examId) {
+      throw new BadRequestException('Select which exam this fee is for');
+    }
+    const exam = await this.examsRepo.findOne({ where: { id: examId } });
+    if (!exam) {
+      throw new BadRequestException('Selected exam was not found');
+    }
+    return exam.id;
+  }
 
   async create(
     dto: CreateStudentFeeDto,
     createdById: number,
   ): Promise<StudentFee> {
     await this.studentsService.findById(dto.studentId);
-    await this.feeTypesService.findById(dto.feeTypeId);
+    const feeType = await this.feeTypesService.findById(dto.feeTypeId);
+    const examId = await this.resolveExamId(feeType.name, dto.examId);
     try {
       const fee = this.studentFeesRepo.create({
         studentId: dto.studentId,
@@ -108,6 +130,7 @@ export class StudentFeesService {
         periodMonth: dto.periodMonth ?? null,
         periodYear: dto.periodYear ?? null,
         note: dto.note ?? null,
+        examId,
         createdById,
       });
       return await this.studentFeesRepo.save(fee);
@@ -129,7 +152,8 @@ export class StudentFeesService {
     dto: BulkApplyFeeDto,
     createdById: number,
   ): Promise<{ created: number; skipped: number }> {
-    await this.feeTypesService.findById(dto.feeTypeId);
+    const feeType = await this.feeTypesService.findById(dto.feeTypeId);
+    const examId = await this.resolveExamId(feeType.name, dto.examId);
     const students = await this.studentsService.findAll({
       classId: dto.classId,
     });
@@ -146,6 +170,7 @@ export class StudentFeesService {
             periodMonth: dto.periodMonth ?? null,
             periodYear: dto.periodYear ?? null,
             note: dto.note ?? null,
+            examId,
             createdById,
           }),
         );
@@ -179,6 +204,7 @@ export class StudentFeesService {
     const skipped: string[] = [];
     for (const entry of dto.fees) {
       const feeType = await this.feeTypesService.findOrCreateByName(entry.name);
+      const examId = await this.resolveExamId(feeType.name, entry.examId);
       try {
         const fee = await this.studentFeesRepo.save(
           this.studentFeesRepo.create({
@@ -188,6 +214,7 @@ export class StudentFeesService {
             periodMonth: dto.periodMonth ?? null,
             periodYear: dto.periodYear ?? null,
             note: dto.note ?? null,
+            examId,
             createdById,
           }),
         );
@@ -253,6 +280,19 @@ export class StudentFeesService {
     await this.studentFeesRepo.delete(id);
   }
 
+  // Backing the Exam Fee billing dialogs' exam picker. A dedicated lookup
+  // here (rather than reusing ExamsController's GET /exams) keeps finance
+  // accounts scoped to their own module — they still never touch
+  // ExamsController, which deliberately excludes Role.FINANCE from reading
+  // marks/results.
+  async listExamsForBilling(classId?: number): Promise<Array<{ id: number; name: string; academicYear: string | null }>> {
+    return this.examsRepo.find({
+      where: classId ? { classId } : {},
+      select: { id: true, name: true, academicYear: true },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
   private isUniqueViolation(err: unknown): boolean {
     return (
       typeof err === 'object' &&
@@ -302,6 +342,7 @@ export class StudentFeesService {
       JOIN classes c ON c.id = s.class_id
       JOIN sections sec ON sec.id = s.section_id
       JOIN fee_types ft ON ft.id = sf.fee_type_id
+      LEFT JOIN exams e ON e.id = sf.exam_id
       LEFT JOIN (
         SELECT student_fee_id, SUM(amount) AS paid
         FROM payments
@@ -339,6 +380,8 @@ export class StudentFeesService {
           sf.period_month AS "periodMonth",
           sf.period_year AS "periodYear",
           sf.note AS "note",
+          sf.exam_id AS "examId",
+          e.name AS "examName",
           sf.created_at AS "createdAt"
         ${base}
       ) x
@@ -395,12 +438,14 @@ export class StudentFeesService {
         sf.amount_due AS "amountDue", COALESCE(p.paid, 0)::int AS "paid",
         (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
         CASE WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID' WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID' ELSE 'PARTIAL' END AS "status",
-        sf.period_month AS "periodMonth", sf.period_year AS "periodYear", sf.note AS "note", sf.created_at AS "createdAt"
+        sf.period_month AS "periodMonth", sf.period_year AS "periodYear", sf.note AS "note",
+        sf.exam_id AS "examId", e.name AS "examName", sf.created_at AS "createdAt"
       FROM student_fees sf
       JOIN students s ON s.id = sf.student_id
       JOIN classes c ON c.id = s.class_id
       JOIN sections sec ON sec.id = s.section_id
       JOIN fee_types ft ON ft.id = sf.fee_type_id
+      LEFT JOIN exams e ON e.id = sf.exam_id
       LEFT JOIN (SELECT student_fee_id, SUM(amount) AS paid FROM payments WHERE status = 'active' GROUP BY student_fee_id) p ON p.student_fee_id = sf.id
       WHERE sf.id = $1
       `,

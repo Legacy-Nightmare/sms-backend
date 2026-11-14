@@ -39,9 +39,11 @@ describe('StudentFeesService.recordPayment', () => {
 
     const studentFeesRepo = { manager } as never;
     const paymentsRepo = {} as never;
+    const examsRepo = {} as never;
     service = new StudentFeesService(
       studentFeesRepo,
       paymentsRepo,
+      examsRepo,
       {} as never,
       {} as never,
     );
