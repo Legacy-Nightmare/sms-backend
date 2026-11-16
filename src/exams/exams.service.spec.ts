@@ -34,6 +34,7 @@ describe('ExamsService.enterMarks', () => {
     const academicsService = { findClassById: jest.fn() };
     const subjectsService = { findById: jest.fn() };
     usersService = { findById: jest.fn() };
+    const attendanceService = {};
 
     // Constructed directly (no Nest TestingModule/DI) — this is a plain unit
     // test of the validation + transaction logic, not of Nest wiring, and
@@ -49,6 +50,7 @@ describe('ExamsService.enterMarks', () => {
       academicsService as never,
       subjectsService as never,
       usersService as never,
+      attendanceService as never,
     );
   });
 
@@ -236,6 +238,7 @@ describe('ExamsService.getCombinedResult', () => {
     };
     const subjectsService = { findById: jest.fn() };
     const usersService = { findById: jest.fn() };
+    const attendanceService = {};
 
     return new ExamsService(
       subjectsRepo as never,
@@ -247,6 +250,7 @@ describe('ExamsService.getCombinedResult', () => {
       academicsService as never,
       subjectsService as never,
       usersService as never,
+      attendanceService as never,
     );
   }
 

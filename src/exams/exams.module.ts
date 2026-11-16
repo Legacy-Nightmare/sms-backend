@@ -11,6 +11,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { AcademicsModule } from '../academics/academics.module';
 import { SubjectsModule } from '../subjects/subjects.module';
 import { UsersModule } from '../users/users.module';
+import { AttendanceModule } from '../attendance/attendance.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { UsersModule } from '../users/users.module';
     AcademicsModule,
     SubjectsModule,
     UsersModule,
+    AttendanceModule,
   ],
   controllers: [ExamsController],
   providers: [ExamsService],

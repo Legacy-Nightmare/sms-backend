@@ -6,9 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Subject } from './entities/subject.entity';
-import { Exam, ExamType } from './entities/exam.entity';
+import { Exam, ExamComponent, ExamType } from './entities/exam.entity';
 import { Mark } from './entities/mark.entity';
 import { TeacherClassSubject } from '../teachers/entities/teacher-class-subject.entity';
 import { CreateSubjectDto } from './dto/create-subject.dto';
@@ -22,6 +22,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AcademicsService } from '../academics/academics.service';
 import { SubjectsService } from '../subjects/subjects.service';
 import { UsersService } from '../users/users.service';
+import { AttendanceService } from '../attendance/attendance.service';
 import { Role } from '../common/enums/role.enum';
 
 // Identifies the caller for the assignment check below — admins bypass it
@@ -77,6 +78,39 @@ export interface CombinedStudentResult {
   gpa: number;
 }
 
+export interface ProgressReportSubject {
+  subjectId: number;
+  subjectName: string;
+  fullMarks: number;
+  ct1Marks: number | null;
+  ct2Marks: number | null;
+  semesterFinalMarks: number | null;
+  totalMarks: number;
+  highestMarks: number;
+  gradePoint: number;
+  letterGrade: string;
+}
+
+export interface ProgressReport {
+  studentId: number;
+  studentName: string;
+  studentCode: string;
+  roll: number;
+  className: string;
+  sectionName: string;
+  academicYear: string;
+  examTitle: string;
+  subjects: ProgressReportSubject[];
+  totalFullMarks: number;
+  totalObtained: number;
+  gpa: number;
+  letterGrade: string;
+  position: number;
+  totalStudents: number;
+  totalWorkingDays: number | null;
+  totalAttendances: number | null;
+}
+
 @Injectable()
 export class ExamsService {
   constructor(
@@ -93,6 +127,7 @@ export class ExamsService {
     private readonly academicsService: AcademicsService,
     private readonly subjectsService: SubjectsService,
     private readonly usersService: UsersService,
+    private readonly attendanceService: AttendanceService,
   ) {}
 
   // Admins can enter marks for anything; a teacher account can only enter
@@ -120,6 +155,39 @@ export class ExamsService {
     }
   }
 
+  // CT1 + CT2 + Semester Final must either all be provided (and sum to
+  // fullMarks) or all be left out — a subject either has a progress-report
+  // split configured or it doesn't, no half-configured state.
+  private validateComponentSplit(
+    fullMarks: number,
+    ct1: number | null | undefined,
+    ct2: number | null | undefined,
+    semesterFinal: number | null | undefined,
+  ): { ct1FullMarks: number | null; ct2FullMarks: number | null; semesterFinalFullMarks: number | null } {
+    const provided = [ct1, ct2, semesterFinal].filter(
+      (v): v is number => v !== undefined && v !== null,
+    );
+    if (provided.length === 0) {
+      return { ct1FullMarks: null, ct2FullMarks: null, semesterFinalFullMarks: null };
+    }
+    if (provided.length !== 3) {
+      throw new BadRequestException(
+        "Provide CT1, CT2, and Semester Final full marks together, or leave all three blank",
+      );
+    }
+    const sum = (ct1 as number) + (ct2 as number) + (semesterFinal as number);
+    if (sum !== fullMarks) {
+      throw new BadRequestException(
+        `CT1 + CT2 + Semester Final (${sum}) must add up to this subject's full marks (${fullMarks})`,
+      );
+    }
+    return {
+      ct1FullMarks: ct1 as number,
+      ct2FullMarks: ct2 as number,
+      semesterFinalFullMarks: semesterFinal as number,
+    };
+  }
+
   async createSubject(dto: CreateSubjectDto): Promise<Subject> {
     const existing = await this.subjectsRepo.findOne({
       where: { classId: dto.classId, subjectId: dto.subjectId },
@@ -128,11 +196,19 @@ export class ExamsService {
       throw new ConflictException('This subject is already added to this class');
     }
     const catalogSubject = await this.subjectsService.findById(dto.subjectId);
+    const fullMarks = dto.fullMarks ?? catalogSubject.defaultFullMarks ?? 100;
+    const split = this.validateComponentSplit(
+      fullMarks,
+      dto.ct1FullMarks,
+      dto.ct2FullMarks,
+      dto.semesterFinalFullMarks,
+    );
     const subject = this.subjectsRepo.create({
       classId: dto.classId,
       subjectId: dto.subjectId,
       name: catalogSubject.name,
-      fullMarks: dto.fullMarks ?? catalogSubject.defaultFullMarks ?? 100,
+      fullMarks,
+      ...split,
     });
     return this.subjectsRepo.save(subject);
   }
@@ -167,7 +243,13 @@ export class ExamsService {
     if (!subject) {
       throw new NotFoundException('Subject not found');
     }
-    await this.subjectsRepo.update(id, { fullMarks: dto.fullMarks });
+    const split = this.validateComponentSplit(
+      dto.fullMarks,
+      dto.ct1FullMarks,
+      dto.ct2FullMarks,
+      dto.semesterFinalFullMarks,
+    );
+    await this.subjectsRepo.update(id, { fullMarks: dto.fullMarks, ...split });
     return this.subjectsRepo.findOneByOrFail({ id });
   }
 
@@ -201,6 +283,13 @@ export class ExamsService {
       sectionId: dto.sectionId !== undefined ? dto.sectionId : exam.sectionId,
       examDate: dto.examDate ?? exam.examDate,
       academicYear: dto.academicYear ?? exam.academicYear,
+      component: dto.component !== undefined ? dto.component : exam.component,
+      attendancePeriodFrom:
+        dto.attendancePeriodFrom !== undefined
+          ? dto.attendancePeriodFrom
+          : exam.attendancePeriodFrom,
+      attendancePeriodTo:
+        dto.attendancePeriodTo !== undefined ? dto.attendancePeriodTo : exam.attendancePeriodTo,
     });
     return this.findExamById(examId);
   }
@@ -535,6 +624,197 @@ export class ExamsService {
       percentage: Math.round((percentage + Number.EPSILON) * 100) / 100,
       grade,
       gpa,
+    };
+  }
+
+  // The school's own three-part progress report: CT1 + CT2 + Semester Final
+  // raw marks summed per subject (not a weighted blend — see
+  // getCombinedResult above for that, separate feature). Ranking/"highest
+  // marks" are computed within the student's own section, since that's the
+  // group a printed report card is normally compared against.
+  async getProgressReport(
+    classId: number,
+    studentId: number,
+    academicYear: string,
+  ): Promise<ProgressReport> {
+    const student = await this.studentsService.findById(studentId);
+
+    const [ct1Exam, ct2Exam, semesterFinalExam] = await Promise.all([
+      this.examsRepo.findOne({
+        where: { classId, academicYear, component: ExamComponent.CT1 },
+        order: { createdAt: 'DESC' },
+      }),
+      this.examsRepo.findOne({
+        where: { classId, academicYear, component: ExamComponent.CT2 },
+        order: { createdAt: 'DESC' },
+      }),
+      this.examsRepo.findOne({
+        where: { classId, academicYear, component: ExamComponent.SEMESTER_FINAL },
+        order: { createdAt: 'DESC' },
+      }),
+    ]);
+    if (!ct1Exam && !ct2Exam && !semesterFinalExam) {
+      throw new NotFoundException(
+        `No progress-report exams (CT1/CT2/Semester Final) found for this class in ${academicYear}`,
+      );
+    }
+
+    const allSubjects = await this.subjectsRepo.find({ where: { classId } });
+    const reportableSubjects = allSubjects.filter(
+      (s) =>
+        s.ct1FullMarks !== null &&
+        s.ct2FullMarks !== null &&
+        s.semesterFinalFullMarks !== null,
+    );
+    if (reportableSubjects.length === 0) {
+      throw new BadRequestException(
+        'No subjects in this class have a CT1/CT2/Semester Final split configured yet',
+      );
+    }
+    const reportableSubjectIds = new Set(reportableSubjects.map((s) => s.id));
+
+    // Ranking pool = the student's own section, not the whole class — a
+    // printed report card's "Position" is normally within one's own
+    // section.
+    const classmates = await this.studentsService.findAll({
+      classId,
+      sectionId: student.sectionId,
+    });
+    const classmateIds = classmates.map((s) => s.id);
+
+    const [ct1Marks, ct2Marks, semesterFinalMarks] = await Promise.all([
+      ct1Exam
+        ? this.marksRepo.find({ where: { examId: ct1Exam.id, studentId: In(classmateIds) } })
+        : Promise.resolve<Mark[]>([]),
+      ct2Exam
+        ? this.marksRepo.find({ where: { examId: ct2Exam.id, studentId: In(classmateIds) } })
+        : Promise.resolve<Mark[]>([]),
+      semesterFinalExam
+        ? this.marksRepo.find({
+            where: { examId: semesterFinalExam.id, studentId: In(classmateIds) },
+          })
+        : Promise.resolve<Mark[]>([]),
+    ]);
+
+    // Per-student, per-subject totals across all three components — feeds
+    // both this student's own row and the class-wide "highest marks"/rank.
+    const totalsByStudent = new Map<number, Map<number, number>>();
+    const addMarks = (marks: Mark[]) => {
+      for (const m of marks) {
+        if (!reportableSubjectIds.has(m.subjectId)) continue;
+        const bySubject = totalsByStudent.get(m.studentId) ?? new Map<number, number>();
+        bySubject.set(m.subjectId, (bySubject.get(m.subjectId) ?? 0) + m.marksObtained);
+        totalsByStudent.set(m.studentId, bySubject);
+      }
+    };
+    addMarks(ct1Marks);
+    addMarks(ct2Marks);
+    addMarks(semesterFinalMarks);
+
+    const highestBySubject = new Map<number, number>();
+    for (const bySubject of totalsByStudent.values()) {
+      for (const [subjectId, total] of bySubject) {
+        highestBySubject.set(subjectId, Math.max(highestBySubject.get(subjectId) ?? 0, total));
+      }
+    }
+
+    const ct1ByStudent = new Map(
+      ct1Marks.filter((m) => m.studentId === studentId).map((m) => [m.subjectId, m.marksObtained]),
+    );
+    const ct2ByStudent = new Map(
+      ct2Marks.filter((m) => m.studentId === studentId).map((m) => [m.subjectId, m.marksObtained]),
+    );
+    const semesterFinalByStudent = new Map(
+      semesterFinalMarks
+        .filter((m) => m.studentId === studentId)
+        .map((m) => [m.subjectId, m.marksObtained]),
+    );
+
+    const subjectRows: ProgressReportSubject[] = reportableSubjects.map((s) => {
+      const ct1 = ct1ByStudent.get(s.id) ?? null;
+      const ct2 = ct2ByStudent.get(s.id) ?? null;
+      const semesterFinal = semesterFinalByStudent.get(s.id) ?? null;
+      const total = (ct1 ?? 0) + (ct2 ?? 0) + (semesterFinal ?? 0);
+      const percentage = s.fullMarks > 0 ? (total / s.fullMarks) * 100 : 0;
+      const { grade, gpa } = gradeForPercentage(percentage);
+      return {
+        subjectId: s.id,
+        subjectName: s.name,
+        fullMarks: s.fullMarks,
+        ct1Marks: ct1,
+        ct2Marks: ct2,
+        semesterFinalMarks: semesterFinal,
+        totalMarks: total,
+        highestMarks: highestBySubject.get(s.id) ?? total,
+        gradePoint: gpa,
+        letterGrade: grade,
+      };
+    });
+
+    const totalFullMarks = reportableSubjects.reduce((sum, s) => sum + s.fullMarks, 0);
+    const totalObtained = subjectRows.reduce((sum, s) => sum + s.totalMarks, 0);
+    const overallPercentage = totalFullMarks > 0 ? (totalObtained / totalFullMarks) * 100 : 0;
+    const { grade: overallGrade, gpa: overallGpa } = gradeForPercentage(overallPercentage);
+
+    // Standard competition ranking (ties share a rank; the next distinct
+    // score resumes at "number of students so far", e.g. 1st, 1st, 3rd).
+    const classmatePercentages = classmates
+      .map((c) => {
+        const bySubject = totalsByStudent.get(c.id) ?? new Map<number, number>();
+        const obtained = reportableSubjects.reduce(
+          (sum, s) => sum + (bySubject.get(s.id) ?? 0),
+          0,
+        );
+        return {
+          studentId: c.id,
+          percentage: totalFullMarks > 0 ? (obtained / totalFullMarks) * 100 : 0,
+        };
+      })
+      .sort((a, b) => b.percentage - a.percentage);
+    let position = 1;
+    for (let i = 0; i < classmatePercentages.length; i++) {
+      if (i > 0 && classmatePercentages[i].percentage < classmatePercentages[i - 1].percentage) {
+        position = i + 1;
+      }
+      if (classmatePercentages[i].studentId === studentId) {
+        break;
+      }
+    }
+
+    let totalWorkingDays: number | null = null;
+    let totalAttendances: number | null = null;
+    if (semesterFinalExam?.attendancePeriodFrom && semesterFinalExam.attendancePeriodTo) {
+      const from = new Date(semesterFinalExam.attendancePeriodFrom);
+      const to = new Date(semesterFinalExam.attendancePeriodTo);
+      to.setHours(23, 59, 59, 999);
+      [totalWorkingDays, totalAttendances] = await Promise.all([
+        this.attendanceService.countWorkingDays(classId, student.sectionId, from, to),
+        this.attendanceService.countAttendanceDays(studentId, from, to),
+      ]);
+    }
+
+    return {
+      studentId: student.id,
+      studentName: student.name,
+      studentCode: student.code,
+      roll: student.roll,
+      className: student.classEntity.name,
+      sectionName: student.section.name,
+      academicYear,
+      examTitle:
+        semesterFinalExam?.name ??
+        ct2Exam?.name ??
+        ct1Exam?.name ??
+        `Progress Report — ${academicYear}`,
+      subjects: subjectRows,
+      totalFullMarks,
+      totalObtained: Math.round((totalObtained + Number.EPSILON) * 100) / 100,
+      gpa: overallGpa,
+      letterGrade: overallGrade,
+      position,
+      totalStudents: classmates.length,
+      totalWorkingDays,
+      totalAttendances,
     };
   }
 

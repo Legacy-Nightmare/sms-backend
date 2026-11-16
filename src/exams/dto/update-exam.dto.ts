@@ -1,5 +1,5 @@
 import { IsEnum, IsInt, IsOptional, IsString, ValidateIf } from 'class-validator';
-import { ExamType } from '../entities/exam.entity';
+import { ExamComponent, ExamType } from '../entities/exam.entity';
 
 // classId is deliberately not editable here — changing a published or
 // marks-in-progress exam's class would orphan marks keyed to students in
@@ -27,4 +27,20 @@ export class UpdateExamDto {
   @IsOptional()
   @IsString()
   academicYear?: string;
+
+  // Explicit `null` clears it back to "not a progress-report component".
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsEnum(ExamComponent)
+  component?: ExamComponent | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  attendancePeriodFrom?: string | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  attendancePeriodTo?: string | null;
 }

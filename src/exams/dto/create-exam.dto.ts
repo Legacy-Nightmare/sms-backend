@@ -1,5 +1,5 @@
 import { IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
-import { ExamType } from '../entities/exam.entity';
+import { ExamComponent, ExamType } from '../entities/exam.entity';
 
 export class CreateExamDto {
   @IsString()
@@ -23,4 +23,19 @@ export class CreateExamDto {
   @IsOptional()
   @IsString()
   academicYear?: string;
+
+  // Progress-report component (CT1/CT2/Semester Final) — omit for every
+  // other exam.
+  @IsOptional()
+  @IsEnum(ExamComponent)
+  component?: ExamComponent;
+
+  // Only meaningful (and required together) on a SEMESTER_FINAL component.
+  @IsOptional()
+  @IsString()
+  attendancePeriodFrom?: string;
+
+  @IsOptional()
+  @IsString()
+  attendancePeriodTo?: string;
 }

@@ -88,6 +88,41 @@ export class AttendanceService {
     }));
   }
 
+  // "Total Working Days" for a progress report's attendance footer — the
+  // number of distinct calendar days in the range where *any* student in
+  // the class(+section) punched in, used as a stand-in for "the school was
+  // open that day" since there's no separate school-calendar/holiday table.
+  async countWorkingDays(
+    classId: number,
+    sectionId: number | undefined,
+    from: Date,
+    to: Date,
+  ): Promise<number> {
+    const students = await this.studentsService.findAll({ classId, sectionId });
+    const studentIds = students.map((s) => s.id);
+    if (studentIds.length === 0) {
+      return 0;
+    }
+    const { count } = await this.attendanceRepo
+      .createQueryBuilder('log')
+      .select('COUNT(DISTINCT log.punch_time::date)', 'count')
+      .where('log.student_id IN (:...studentIds)', { studentIds })
+      .andWhere('log.punch_time BETWEEN :from AND :to', { from, to })
+      .getRawOne<{ count: string }>();
+    return parseInt(count, 10);
+  }
+
+  // "Total Attendances" — the same distinct-day count, for one student.
+  async countAttendanceDays(studentId: number, from: Date, to: Date): Promise<number> {
+    const { count } = await this.attendanceRepo
+      .createQueryBuilder('log')
+      .select('COUNT(DISTINCT log.punch_time::date)', 'count')
+      .where('log.student_id = :studentId', { studentId })
+      .andWhere('log.punch_time BETWEEN :from AND :to', { from, to })
+      .getRawOne<{ count: string }>();
+    return parseInt(count, 10);
+  }
+
   // Attendance for a whole class(+section) on a single day, marking every
   // student without a punch that day as absent rather than just omitting
   // them — the device only ever reports who showed up.

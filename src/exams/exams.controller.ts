@@ -153,6 +153,15 @@ export class ExamsController {
     );
   }
 
+  @Get('classes/:classId/students/:studentId/progress-report')
+  getProgressReport(
+    @Param('classId', ParseIntPipe) classId: number,
+    @Param('studentId', ParseIntPipe) studentId: number,
+    @Query('academicYear') academicYear: string,
+  ) {
+    return this.examsService.getProgressReport(classId, studentId, academicYear);
+  }
+
   @Post('exams/:id/publish')
   @Roles(Role.ADMIN)
   publish(@Param('id', ParseIntPipe) examId: number) {

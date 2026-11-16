@@ -18,6 +18,18 @@ export enum ExamType {
   FINAL = 'final',
 }
 
+// Marks a school's own three-part semester progress report: two small class
+// tests (CT1/CT2) plus one larger semester-end exam, whose raw marks sum to
+// a subject's full marks — a different, additive scheme from the
+// TUTORIAL/FINAL weighted-blend above (getCombinedResult), not a
+// replacement for it. Null (the default) means this exam isn't part of a
+// progress report at all.
+export enum ExamComponent {
+  CT1 = 'ct1',
+  CT2 = 'ct2',
+  SEMESTER_FINAL = 'semester_final',
+}
+
 @Entity('exams')
 export class Exam {
   @PrimaryGeneratedColumn()
@@ -71,6 +83,21 @@ export class Exam {
   // publishedAt (which gates the guardian-facing dashboard/email results).
   @Column({ name: 'results_announced_at', type: 'timestamptz', nullable: true })
   resultsAnnouncedAt: Date | null;
+
+  // Which progress-report component this exam represents (CT1/CT2/Semester
+  // Final), or null for every other exam (Midterm, the existing
+  // TUTORIAL/FINAL combined-result exams, etc.) — unrelated to `type` above.
+  @Column({ name: 'component', type: 'enum', enum: ExamComponent, nullable: true })
+  component: ExamComponent | null;
+
+  // Only meaningful on the SEMESTER_FINAL component of a progress report —
+  // the date range the report's "Total Working Days"/"Total Attendances"
+  // footer counts real attendance punches over.
+  @Column({ name: 'attendance_period_from', type: 'date', nullable: true })
+  attendancePeriodFrom: string | null;
+
+  @Column({ name: 'attendance_period_to', type: 'date', nullable: true })
+  attendancePeriodTo: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

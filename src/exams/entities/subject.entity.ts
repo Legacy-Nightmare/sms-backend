@@ -34,4 +34,17 @@ export class Subject {
 
   @Column({ name: 'full_marks', type: 'int', default: 100 })
   fullMarks: number;
+
+  // Optional per-component split of fullMarks for the progress-report
+  // feature (CT1 + CT2 + Semester Final must sum to fullMarks when all
+  // three are set — validated in createSubject/updateSubject, not here).
+  // Null for every subject that hasn't opted into progress reports yet.
+  @Column({ name: 'ct1_full_marks', type: 'int', nullable: true })
+  ct1FullMarks: number | null;
+
+  @Column({ name: 'ct2_full_marks', type: 'int', nullable: true })
+  ct2FullMarks: number | null;
+
+  @Column({ name: 'semester_final_full_marks', type: 'int', nullable: true })
+  semesterFinalFullMarks: number | null;
 }
