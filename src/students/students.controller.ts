@@ -4,16 +4,19 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   ParseIntPipe,
   Post,
   Put,
   Query,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StudentsService } from './students.service';
 import { CreateStudentDto } from './dto/create-student.dto';
@@ -59,6 +62,31 @@ export class StudentsController {
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.studentsService.findById(id);
+  }
+
+  // Streams the student's photo through this server instead of the browser
+  // fetching it directly from the storage bucket — the bucket sends no
+  // Access-Control-Allow-Origin header, so a browser-side fetch() (needed to
+  // embed the photo in a generated PDF, unlike a plain <img src>) fails with
+  // a CORS error. A server-to-server fetch isn't subject to CORS at all, and
+  // this server already sends its own CORS headers on every response.
+  @Get(':id/photo')
+  async getPhoto(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const student = await this.studentsService.findById(id);
+    if (!student.photoUrl) {
+      throw new NotFoundException('This student has no photo');
+    }
+    const upstream = await fetch(student.photoUrl);
+    if (!upstream.ok || !upstream.body) {
+      throw new NotFoundException('Photo could not be retrieved from storage');
+    }
+    res.setHeader(
+      'Content-Type',
+      upstream.headers.get('content-type') ?? 'application/octet-stream',
+    );
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.status(200).send(buffer);
   }
 
   @Put(':id')
