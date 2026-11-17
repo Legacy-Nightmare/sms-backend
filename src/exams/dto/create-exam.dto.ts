@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
 import { ExamComponent, ExamType } from '../entities/exam.entity';
 
 export class CreateExamDto {
@@ -38,4 +38,9 @@ export class CreateExamDto {
   @IsOptional()
   @IsString()
   attendancePeriodTo?: string;
+
+  // Whether this exam can be linked to an Exam Fee for an admit card.
+  @IsOptional()
+  @IsBoolean()
+  issuesAdmitCard?: boolean;
 }

@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, ValidateIf } from 'class-validator';
 import { ExamComponent, ExamType } from '../entities/exam.entity';
 
 // classId is deliberately not editable here — changing a published or
@@ -43,4 +43,8 @@ export class UpdateExamDto {
   @ValidateIf((_, value) => value !== null)
   @IsString()
   attendancePeriodTo?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  issuesAdmitCard?: boolean;
 }

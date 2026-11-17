@@ -287,7 +287,7 @@ export class StudentFeesService {
   // marks/results.
   async listExamsForBilling(classId?: number): Promise<Array<{ id: number; name: string; academicYear: string | null }>> {
     return this.examsRepo.find({
-      where: classId ? { classId } : {},
+      where: { issuesAdmitCard: true, ...(classId ? { classId } : {}) },
       select: { id: true, name: true, academicYear: true },
       order: { createdAt: 'DESC' },
     });

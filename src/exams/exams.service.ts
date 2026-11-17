@@ -290,6 +290,7 @@ export class ExamsService {
           : exam.attendancePeriodFrom,
       attendancePeriodTo:
         dto.attendancePeriodTo !== undefined ? dto.attendancePeriodTo : exam.attendancePeriodTo,
+      issuesAdmitCard: dto.issuesAdmitCard ?? exam.issuesAdmitCard,
     });
     return this.findExamById(examId);
   }

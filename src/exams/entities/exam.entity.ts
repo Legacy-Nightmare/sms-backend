@@ -99,6 +99,12 @@ export class Exam {
   @Column({ name: 'attendance_period_to', type: 'date', nullable: true })
   attendancePeriodTo: string | null;
 
+  // Whether a student fee can be linked to this exam for an admit card —
+  // not every exam (e.g. a class test) needs one. Set right after creation
+  // via the "Issue admit card?" prompt; false until then.
+  @Column({ name: 'issues_admit_card', default: false })
+  issuesAdmitCard: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }
