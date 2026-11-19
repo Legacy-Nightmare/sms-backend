@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -25,8 +26,12 @@ export class AuthController {
     private readonly usersService: UsersService,
   ) {}
 
+  // Tighter than the app default (F-27) — login is a brute-force target,
+  // 5 attempts/minute/IP is plenty for a real person who mistyped a password.
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto.email, dto.password);
   }

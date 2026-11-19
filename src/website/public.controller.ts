@@ -1,13 +1,17 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { WebsiteService } from './website.service';
 
-// No guards anywhere in this controller — these are the only endpoints the
-// public homepage calls, and they're meant to be reachable by anonymous
-// visitors. Keep anything sensitive (individual marks, internal bookkeeping
-// fields) out of what gets returned here.
+// No auth guards anywhere in this controller — these are the only
+// endpoints the public homepage calls, and they're meant to be reachable
+// by anonymous visitors. Keep anything sensitive (individual marks,
+// internal bookkeeping fields) out of what gets returned here. The rate
+// limit (ThrottlerGuard, F-27) is the one guard that does apply, since
+// nothing here requires a login to throttle by IP.
 @ApiTags('public')
 @Controller('public')
+@UseGuards(ThrottlerGuard)
 export class PublicController {
   constructor(private readonly websiteService: WebsiteService) {}
 

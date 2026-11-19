@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AcademicsModule } from './academics/academics.module';
@@ -21,6 +22,12 @@ import { StorageModule } from './platform/storage/storage.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Not applied globally — F-27 found no rate limiting at all on the
+    // unauthenticated endpoints (login, public homepage, admit-card
+    // lookup/download) that actually need it. Only those controllers
+    // opt in with @UseGuards(ThrottlerGuard); everything else (the
+    // authenticated dashboard) is unaffected.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
     StorageModule,
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
