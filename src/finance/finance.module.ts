@@ -7,6 +7,7 @@ import { Payment } from './entities/payment.entity';
 import { TeacherSalary } from './entities/teacher-salary.entity';
 import { SalaryPayment } from './entities/salary-payment.entity';
 import { Expense } from './entities/expense.entity';
+import { ExpensePayment } from './entities/expense-payment.entity';
 import { Exam } from '../exams/entities/exam.entity';
 import { FeeTypesService } from './fee-types.service';
 import { StudentFeesService } from './student-fees.service';
@@ -19,7 +20,17 @@ import { TeachersModule } from '../teachers/teachers.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([FeeType, ClassFee, StudentFee, Payment, TeacherSalary, SalaryPayment, Expense, Exam]),
+    TypeOrmModule.forFeature([
+      FeeType,
+      ClassFee,
+      StudentFee,
+      Payment,
+      TeacherSalary,
+      SalaryPayment,
+      Expense,
+      ExpensePayment,
+      Exam,
+    ]),
     StudentsModule,
     TeachersModule,
   ],

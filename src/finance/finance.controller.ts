@@ -221,6 +221,21 @@ export class FinanceController {
     return this.expensesService.findAll({ from, to, category });
   }
 
+  @Get('expenses/:id')
+  findExpenseById(@Param('id', ParseIntPipe) id: number) {
+    return this.expensesService.findById(id);
+  }
+
+  @Post('expenses/:id/payments')
+  recordExpensePayment(@Param('id', ParseIntPipe) id: number, @Body() dto: RecordPaymentDto, @Req() req: Request) {
+    return this.expensesService.recordPayment(id, dto, currentUserId(req));
+  }
+
+  @Post('expense-payments/:id/void')
+  voidExpensePayment(@Param('id', ParseIntPipe) id: number, @Body() dto: VoidRecordDto, @Req() req: Request) {
+    return this.expensesService.voidPayment(id, dto, currentUserId(req));
+  }
+
   @Post('expenses/:id/void')
   voidExpense(@Param('id', ParseIntPipe) id: number, @Body() dto: VoidRecordDto, @Req() req: Request) {
     return this.expensesService.void(id, dto, currentUserId(req));
