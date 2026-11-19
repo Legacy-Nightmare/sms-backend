@@ -6,6 +6,7 @@ import { SalaryPayment } from './entities/salary-payment.entity';
 import { CreateTeacherSalaryDto, BulkGenerateSalaryDto } from './dto/teacher-salary.dto';
 import { RecordPaymentDto, VoidRecordDto } from './dto/payment.dto';
 import { RecordStatus } from './entities/enums';
+import { generateReceiptNumber } from './receipt-number.util';
 import { TeachersService } from '../teachers/teachers.service';
 
 export interface TeacherSalaryRow {
@@ -243,7 +244,7 @@ export class TeacherSalaryService {
           idempotencyKey: dto.idempotencyKey ?? null,
         }),
       );
-      payment.receiptNumber = `RCPT-T-${String(payment.id).padStart(6, '0')}`;
+      payment.receiptNumber = await generateReceiptNumber(manager, SalaryPayment, 'RCPT-T');
       return manager.save(SalaryPayment, payment);
     });
   }

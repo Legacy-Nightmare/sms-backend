@@ -7,10 +7,24 @@ import { Exam } from '../../exams/entities/exam.entity';
 // One billed fee for one student — e.g. "Rahim owes 1500 BDT for Monthly
 // Tuition, Oct 2026". Amount is frozen at billing time (not re-derived from
 // ClassFee later). periodMonth/periodYear are null for one-time fees
-// (admission, exam); set for recurring ones (monthly tuition) so the same
-// student can't be billed twice for the same month.
+// (admission); set for recurring ones (monthly tuition) so the same student
+// can't be billed twice for the same month.
+//
+// Exam Fee bills are identified by which *exam* they're for, not by
+// period — two exams can fall in the same month/year and each still needs
+// its own bill. So the two kinds of "already billed?" uniqueness never
+// overlap: the period-based index only applies when there's no exam
+// (examId IS NULL), and the exam-based index only applies when there is
+// one. Without this split, billing a second exam's fee for a student
+// already billed (for any exam) in the same period silently no-ops —
+// it looks like a duplicate of the period-based index, even though it's a
+// different exam.
 @Entity('student_fees')
-@Index(['studentId', 'feeTypeId', 'periodMonth', 'periodYear'], { unique: true })
+@Index(['studentId', 'feeTypeId', 'periodMonth', 'periodYear'], {
+  unique: true,
+  where: '"exam_id" IS NULL',
+})
+@Index(['studentId', 'feeTypeId', 'examId'], { unique: true, where: '"exam_id" IS NOT NULL' })
 export class StudentFee {
   @PrimaryGeneratedColumn()
   id: number;

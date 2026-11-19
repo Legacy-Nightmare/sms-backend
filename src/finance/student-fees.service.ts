@@ -18,6 +18,7 @@ import {
   UpdateStudentFeeDto,
 } from './dto/student-fee.dto';
 import { RecordPaymentDto, VoidRecordDto } from './dto/payment.dto';
+import { generateReceiptNumber } from './receipt-number.util';
 import { RecordStatus } from './entities/enums';
 
 export interface StudentFeeRow {
@@ -285,9 +286,16 @@ export class StudentFeesService {
   // accounts scoped to their own module — they still never touch
   // ExamsController, which deliberately excludes Role.FINANCE from reading
   // marks/results.
+  //
+  // Every exam is listed, not just ones with issuesAdmitCard — that flag
+  // only gates whether an admit card is issuable once this fee is paid, it
+  // doesn't mean other exams can't have their own (independently payable)
+  // exam fee. An earlier version filtered to issuesAdmitCard-only, which
+  // made any other exam impossible to bill at all — invisible in this
+  // picker, with nothing to explain why.
   async listExamsForBilling(classId?: number): Promise<Array<{ id: number; name: string; academicYear: string | null }>> {
     return this.examsRepo.find({
-      where: { issuesAdmitCard: true, ...(classId ? { classId } : {}) },
+      where: classId ? { classId } : {},
       select: { id: true, name: true, academicYear: true },
       order: { createdAt: 'DESC' },
     });
@@ -533,7 +541,7 @@ export class StudentFeesService {
           idempotencyKey: dto.idempotencyKey ?? null,
         }),
       );
-      payment.receiptNumber = `RCPT-S-${String(payment.id).padStart(6, '0')}`;
+      payment.receiptNumber = await generateReceiptNumber(manager, Payment, 'RCPT-S');
       return manager.save(Payment, payment);
     });
   }
