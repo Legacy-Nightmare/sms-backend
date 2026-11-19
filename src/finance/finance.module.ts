@@ -15,8 +15,10 @@ import { TeacherSalaryService } from './teacher-salary.service';
 import { ExpensesService } from './expenses.service';
 import { FinanceReportService } from './finance-report.service';
 import { FinanceController } from './finance.controller';
+import { AdmitCardPublicController } from './admit-card-public.controller';
 import { StudentsModule } from '../students/students.module';
 import { TeachersModule } from '../teachers/teachers.module';
+import { AcademicsModule } from '../academics/academics.module';
 
 @Module({
   imports: [
@@ -33,8 +35,9 @@ import { TeachersModule } from '../teachers/teachers.module';
     ]),
     StudentsModule,
     TeachersModule,
+    AcademicsModule,
   ],
-  controllers: [FinanceController],
+  controllers: [FinanceController, AdmitCardPublicController],
   providers: [FeeTypesService, StudentFeesService, TeacherSalaryService, ExpensesService, FinanceReportService],
 })
 export class FinanceModule {}

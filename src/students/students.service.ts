@@ -94,6 +94,21 @@ export class StudentsService {
     });
   }
 
+  // Backs the public admit-card lookup form, where a guardian identifies
+  // their child by class/section/roll instead of logging in. Only active
+  // students match — a withdrawn/transferred student's roll shouldn't be
+  // usable to probe for one still enrolled under the same number.
+  findByClassSectionRoll(
+    classId: number,
+    sectionId: number,
+    roll: number,
+  ): Promise<Student | null> {
+    return this.studentsRepo.findOne({
+      where: { classId, sectionId, roll, isActive: true },
+      relations: { classEntity: true, section: true },
+    });
+  }
+
   // Biometric IDs start at 1000 (comfortably below that, single/double-digit
   // PINs are easy to mistype on a device keypad) and increment from whatever
   // the highest existing one is, so enrollment order doesn't have to match

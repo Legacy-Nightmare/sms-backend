@@ -301,6 +301,52 @@ export class StudentFeesService {
     });
   }
 
+  // Backs the public admit-card download page's exam picker. Deliberately
+  // NOT the same list as listExamsForBilling above — that one lists every
+  // exam so office staff can bill any of them, but a guardian shouldn't be
+  // offered an exam that was never going to have an admit card in the
+  // first place (issuesAdmitCard=false), even if it happens to have a fee.
+  async listExamsIssuingAdmitCard(
+    classId: number,
+  ): Promise<Array<{ id: number; name: string; academicYear: string | null }>> {
+    return this.examsRepo.find({
+      where: { classId, issuesAdmitCard: true },
+      select: { id: true, name: true, academicYear: true },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  // The one fact the public download flow needs: is this specific
+  // student+exam's fee fully paid, and what's the exam actually called.
+  // Deliberately returns nothing beyond that — no amounts, no payment
+  // history — since this is reachable by anyone who can guess a
+  // class/section/roll/exam combination.
+  async findFeeForExam(
+    studentId: number,
+    examId: number,
+  ): Promise<{ remaining: number; examName: string | null } | null> {
+    const [row] = await this.studentFeesRepo.manager.query(
+      `
+      SELECT
+        (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
+        e.name AS "examName"
+      FROM student_fees sf
+      LEFT JOIN (
+        SELECT student_fee_id, SUM(amount) AS paid
+        FROM payments
+        WHERE status = 'active'
+        GROUP BY student_fee_id
+      ) p ON p.student_fee_id = sf.id
+      LEFT JOIN exams e ON e.id = sf.exam_id
+      WHERE sf.student_id = $1 AND sf.exam_id = $2
+      ORDER BY sf.created_at DESC
+      LIMIT 1
+      `,
+      [studentId, examId],
+    );
+    return row ?? null;
+  }
+
   private isUniqueViolation(err: unknown): boolean {
     return (
       typeof err === 'object' &&
