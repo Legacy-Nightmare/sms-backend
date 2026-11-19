@@ -22,22 +22,30 @@ async function bootstrap() {
   // project's no-cloud-storage footprint everywhere else.
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('School Management System API')
-    .setDescription(
-      'Students, classes, ZKTeco device attendance, exams/results, and guardian notices.',
-    )
-    .setVersion('0.1')
-    .addBearerAuth()
-    .build();
-  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('docs', app, swaggerDocument);
+  // F-17: /docs-json/yaml is the full route/schema map of the API — fine
+  // for local dev, not something a production deploy should serve to
+  // anyone who finds the URL.
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (!isProduction) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('School Management System API')
+      .setDescription(
+        'Students, classes, ZKTeco device attendance, exams/results, and guardian notices.',
+      )
+      .setVersion('0.1')
+      .addBearerAuth()
+      .build();
+    const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, swaggerDocument);
+  }
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
 
   const logger = new Logger('Bootstrap');
   logger.log(`Server running on port ${port}`);
-  logger.log(`Swagger docs available at http://localhost:${port}/docs`);
+  if (!isProduction) {
+    logger.log(`Swagger docs available at http://localhost:${port}/docs`);
+  }
 }
 bootstrap();
