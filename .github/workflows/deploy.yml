@@ -145,6 +145,7 @@ jobs:
           DB_DATABASE: ${{ secrets.STG_DB_DATABASE }}
           JWT_SECRET: ${{ secrets.STG_JWT_SECRET }}
           JWT_EXPIRES_IN: ${{ secrets.STG_JWT_EXPIRES_IN }}
+          RECAPTCHA_SECRET_KEY: ${{ secrets.STG_RECAPTCHA_SECRET_KEY }}
           SMTP_HOST: ${{ secrets.STG_SMTP_HOST }}
           SMTP_PORT: ${{ secrets.STG_SMTP_PORT }}
           SMTP_USER: ${{ secrets.STG_SMTP_USER }}
@@ -157,7 +158,7 @@ jobs:
           host: ${{ secrets.STG_EC2_HOST }}
           username: ${{ secrets.STG_EC2_SSH_USER }}
           key: ${{ secrets.STG_EC2_SSH_KEY }}
-          envs: GHCR_READ_TOKEN,GHCR_ACTOR,IMAGE,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
+          envs: GHCR_READ_TOKEN,GHCR_ACTOR,IMAGE,DB_USERNAME,DB_PASSWORD,DB_DATABASE,JWT_SECRET,JWT_EXPIRES_IN,RECAPTCHA_SECRET_KEY,SMTP_HOST,SMTP_PORT,SMTP_USER,SMTP_PASSWORD,SMTP_FROM,RUSTFS_ACCESS_KEY,RUSTFS_SECRET_KEY
           script: |
             set -eu
             cd /opt/sms
@@ -181,6 +182,7 @@ jobs:
             DATABASE_URL=postgres://$DB_USERNAME:$DB_PASSWORD@postgres:5432/$DB_DATABASE
             JWT_SECRET=$JWT_SECRET
             JWT_EXPIRES_IN=$JWT_EXPIRES_IN
+            RECAPTCHA_SECRET_KEY=$RECAPTCHA_SECRET_KEY
             SMTP_HOST=$SMTP_HOST
             SMTP_PORT=$SMTP_PORT
             SMTP_USER=$SMTP_USER
