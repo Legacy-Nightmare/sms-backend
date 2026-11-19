@@ -42,6 +42,7 @@ export interface StudentFeeRow {
   note: string | null;
   examId: number | null;
   examName: string | null;
+  examIssuesAdmitCard: boolean;
   createdAt: Date;
 }
 
@@ -324,12 +325,13 @@ export class StudentFeesService {
   async findFeeForExam(
     studentId: number,
     examId: number,
-  ): Promise<{ remaining: number; examName: string | null } | null> {
+  ): Promise<{ remaining: number; examName: string | null; issuesAdmitCard: boolean } | null> {
     const [row] = await this.studentFeesRepo.manager.query(
       `
       SELECT
         (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
-        e.name AS "examName"
+        e.name AS "examName",
+        COALESCE(e.issues_admit_card, false) AS "issuesAdmitCard"
       FROM student_fees sf
       LEFT JOIN (
         SELECT student_fee_id, SUM(amount) AS paid
@@ -436,6 +438,7 @@ export class StudentFeesService {
           sf.note AS "note",
           sf.exam_id AS "examId",
           e.name AS "examName",
+          COALESCE(e.issues_admit_card, false) AS "examIssuesAdmitCard",
           sf.created_at AS "createdAt"
         ${base}
       ) x
@@ -493,7 +496,9 @@ export class StudentFeesService {
         (sf.amount_due - COALESCE(p.paid, 0))::int AS "remaining",
         CASE WHEN COALESCE(p.paid, 0) <= 0 THEN 'UNPAID' WHEN COALESCE(p.paid, 0) >= sf.amount_due THEN 'PAID' ELSE 'PARTIAL' END AS "status",
         sf.period_month AS "periodMonth", sf.period_year AS "periodYear", sf.note AS "note",
-        sf.exam_id AS "examId", e.name AS "examName", sf.created_at AS "createdAt"
+        sf.exam_id AS "examId", e.name AS "examName",
+        COALESCE(e.issues_admit_card, false) AS "examIssuesAdmitCard",
+        sf.created_at AS "createdAt"
       FROM student_fees sf
       JOIN students s ON s.id = sf.student_id
       JOIN classes c ON c.id = s.class_id
