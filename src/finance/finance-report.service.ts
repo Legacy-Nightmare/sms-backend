@@ -20,6 +20,7 @@ export interface FinanceSummary {
   profitLoss: number;
   totalDue: number;
   salaryPayable: number;
+  expensePayable: number;
 }
 
 export interface TrendPoint {
@@ -62,7 +63,7 @@ export class FinanceReportService {
     if (filters.feeTypeId) push('sf.fee_type_id = ?', filters.feeTypeId);
     if (filters.method) push('p.method = ?', filters.method);
 
-    const [[incomeRow], [salaryRow], [expenseRow], [dueRow], [payableRow]] = await Promise.all([
+    const [[incomeRow], [salaryRow], [expenseRow], [dueRow], [payableRow], [expensePayableRow]] = await Promise.all([
       this.paymentsRepo.manager.query(
         `
         SELECT COALESCE(SUM(p.amount), 0)::int AS income
@@ -84,8 +85,8 @@ export class FinanceReportService {
       this.paymentsRepo.manager.query(
         `
         SELECT COALESCE(SUM(amount), 0)::int AS other_expense
-        FROM expenses
-        WHERE status = 'active' AND date BETWEEN $1 AND $2
+        FROM expense_payments
+        WHERE status = 'active' AND paid_at BETWEEN $1 AND $2
         `,
         [filters.from, filters.to],
       ),
@@ -111,6 +112,16 @@ export class FinanceReportService {
         `,
         [],
       ),
+      this.paymentsRepo.manager.query(
+        `
+        SELECT COALESCE(SUM(e.amount - COALESCE(p.paid, 0)), 0)::int AS expense_payable
+        FROM expenses e
+        LEFT JOIN (SELECT expense_id, SUM(amount) AS paid FROM expense_payments WHERE status = 'active' GROUP BY expense_id) p
+          ON p.expense_id = e.id
+        WHERE e.status = 'active' AND e.amount - COALESCE(p.paid, 0) > 0
+        `,
+        [],
+      ),
     ]);
 
     const totalIncome = incomeRow.income;
@@ -126,6 +137,7 @@ export class FinanceReportService {
       profitLoss: totalIncome - totalExpense,
       totalDue: dueRow.total_due,
       salaryPayable: payableRow.salary_payable,
+      expensePayable: expensePayableRow.expense_payable,
     };
   }
 
