@@ -271,7 +271,7 @@ describe('ExamsService.getCombinedResult', () => {
       ]); // final marks
 
     const service = buildService({ examsFindOne, marksFind });
-    const result = await service.getCombinedResult(10, 100, '2026');
+    const result = await service.getCombinedResult(10, 100, '2026', admin);
 
     // Math: 60*0.2 + 90*0.8 = 84; English: 80*0.2 + 70*0.8 = 72
     expect(
@@ -295,7 +295,7 @@ describe('ExamsService.getCombinedResult', () => {
     ]); // only the final-exam marks call happens
 
     const service = buildService({ examsFindOne, marksFind });
-    const result = await service.getCombinedResult(10, 100, '2026');
+    const result = await service.getCombinedResult(10, 100, '2026', admin);
 
     expect(result.tutorialExam).toBeNull();
     expect(result.tutorialWeightPercent).toBe(0);
@@ -310,7 +310,7 @@ describe('ExamsService.getCombinedResult', () => {
     const service = buildService({ examsFindOne, marksFind: jest.fn() });
 
     await expect(
-      service.getCombinedResult(10, 100, '2026'),
+      service.getCombinedResult(10, 100, '2026', admin),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

@@ -155,6 +155,37 @@ export class ExamsService {
     }
   }
 
+  // Same reasoning as assertTeacherAssignedToSubject above, but for routes
+  // that aggregate a whole class's result (semester result, progress
+  // report) rather than one subject — a teacher may read these for any
+  // class they teach at least one subject in, not just their own subject's
+  // slice of it.
+  private async assertTeacherAssignedToClass(
+    requester: MarksRequester,
+    classId: number,
+  ): Promise<void> {
+    if (requester.role !== Role.TEACHER) {
+      return;
+    }
+    const user = await this.usersService.findById(requester.userId);
+    if (!user.teacherId) {
+      throw new ForbiddenException(
+        'Your account is not linked to a teacher profile — ask an admin to link it under Staff accounts',
+      );
+    }
+    const assignment = await this.teacherClassSubjectsRepo
+      .createQueryBuilder('tcs')
+      .innerJoin(Subject, 'cs', 'cs.id = tcs.classSubjectId')
+      .where('tcs.teacherId = :teacherId AND cs.classId = :classId', {
+        teacherId: user.teacherId,
+        classId,
+      })
+      .getOne();
+    if (!assignment) {
+      throw new ForbiddenException('You are not assigned to this class');
+    }
+  }
+
   // CT1 + CT2 + Semester Final must either all be provided (and sum to
   // fullMarks) or all be left out — a subject either has a progress-report
   // split configured or it doesn't, no half-configured state.
@@ -521,7 +552,9 @@ export class ExamsService {
     classId: number,
     studentId: number,
     academicYear: string,
+    requester: MarksRequester,
   ): Promise<CombinedStudentResult> {
+    await this.assertTeacherAssignedToClass(requester, classId);
     const classEntity = await this.academicsService.findClassById(classId);
     const student = await this.studentsService.findById(studentId);
 
@@ -637,7 +670,9 @@ export class ExamsService {
     classId: number,
     studentId: number,
     academicYear: string,
+    requester: MarksRequester,
   ): Promise<ProgressReport> {
+    await this.assertTeacherAssignedToClass(requester, classId);
     const student = await this.studentsService.findById(studentId);
 
     const [ct1Exam, ct2Exam, semesterFinalExam] = await Promise.all([

@@ -145,11 +145,13 @@ export class ExamsController {
     @Param('classId', ParseIntPipe) classId: number,
     @Param('studentId', ParseIntPipe) studentId: number,
     @Query('academicYear') academicYear: string,
+    @Req() req: Request,
   ) {
     return this.examsService.getCombinedResult(
       classId,
       studentId,
       academicYear,
+      req.user as MarksRequester,
     );
   }
 
@@ -158,8 +160,14 @@ export class ExamsController {
     @Param('classId', ParseIntPipe) classId: number,
     @Param('studentId', ParseIntPipe) studentId: number,
     @Query('academicYear') academicYear: string,
+    @Req() req: Request,
   ) {
-    return this.examsService.getProgressReport(classId, studentId, academicYear);
+    return this.examsService.getProgressReport(
+      classId,
+      studentId,
+      academicYear,
+      req.user as MarksRequester,
+    );
   }
 
   @Post('exams/:id/publish')
