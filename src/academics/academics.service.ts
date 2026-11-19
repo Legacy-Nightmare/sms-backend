@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { ClassEntity } from './entities/class.entity';
 import { Section } from './entities/section.entity';
 import { CreateClassDto } from './dto/create-class.dto';
@@ -27,6 +27,13 @@ export class AcademicsService {
   ) {}
 
   async createClass(dto: CreateClassDto): Promise<ClassEntity> {
+    // F-10: trimmed and case-insensitive — "class 1", " Class 1 ", and
+    // "Class 1" are the same class name as far as anyone reading the list
+    // is concerned, so they shouldn't be creatable as distinct rows.
+    const name = dto.name.trim();
+    if (!name) {
+      throw new BadRequestException('Class name cannot be blank');
+    }
     if (dto.level !== undefined) {
       const existingLevel = await this.classesRepo.findOne({
         where: { level: dto.level },
@@ -36,14 +43,14 @@ export class AcademicsService {
       }
     }
     const existingName = await this.classesRepo.findOne({
-      where: { name: dto.name },
+      where: { name: ILike(name) },
     });
     if (existingName) {
-      throw new ConflictException(`A class named "${dto.name}" already exists`);
+      throw new ConflictException(`A class named "${name}" already exists`);
     }
 
     const sortOrder = dto.sortOrder ?? (await this.nextSortOrder());
-    const classEntity = this.classesRepo.create({ ...dto, sortOrder });
+    const classEntity = this.classesRepo.create({ ...dto, name, sortOrder });
     return this.classesRepo.save(classEntity);
   }
 
@@ -58,14 +65,25 @@ export class AcademicsService {
   async updateClass(id: number, dto: UpdateClassDto): Promise<ClassEntity> {
     const classEntity = await this.findClassById(id);
 
-    if (dto.name !== undefined && dto.name !== classEntity.name) {
-      const existingName = await this.classesRepo.findOne({
-        where: { name: dto.name },
-      });
-      if (existingName) {
-        throw new ConflictException(`A class named "${dto.name}" already exists`);
+    let renamed = false;
+    if (dto.name !== undefined) {
+      // F-10: same trimmed/case-insensitive treatment as createClass above.
+      const name = dto.name.trim();
+      if (!name) {
+        throw new BadRequestException('Class name cannot be blank');
       }
-      classEntity.name = dto.name;
+      if (name.toLowerCase() !== classEntity.name.toLowerCase()) {
+        const existingName = await this.classesRepo.findOne({
+          where: { name: ILike(name) },
+        });
+        if (existingName) {
+          throw new ConflictException(`A class named "${name}" already exists`);
+        }
+      }
+      if (name !== classEntity.name) {
+        classEntity.name = name;
+        renamed = true;
+      }
     }
     if (dto.level !== undefined) {
       if (dto.level !== null && dto.level !== classEntity.level) {
@@ -83,6 +101,27 @@ export class AcademicsService {
     }
 
     await this.classesRepo.save(classEntity);
+
+    // F-11: `code` ("{className}-{section}-{roll}", built at enrollment —
+    // see students.service.ts) went stale on a rename, since nothing here
+    // ever touched existing students. A fresh collision check isn't needed
+    // per student: the new name was just confirmed unique among classes
+    // above, so two students who already had distinct section+roll codes
+    // under the old name can't collide under the new one either.
+    if (renamed) {
+      const students = await this.studentsRepo.find({
+        where: { classId: id },
+        relations: { section: true },
+      });
+      await Promise.all(
+        students.map((student) =>
+          this.studentsRepo.update(student.id, {
+            code: `${classEntity.name}-${student.section.name}-${student.roll}`,
+          }),
+        ),
+      );
+    }
+
     return this.findClassById(id);
   }
 
