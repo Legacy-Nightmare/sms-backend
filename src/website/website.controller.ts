@@ -51,7 +51,11 @@ export class WebsiteController {
     private readonly storage: StorageService,
   ) {}
 
+  // Overrides the class-level admin-only gate: every logged-in role reads
+  // this (receipt/admit-card/progress-report PDFs all need the school's
+  // phone number), only ADMIN can still write it via PUT below.
   @Get('profile')
+  @Roles(Role.ADMIN, Role.FINANCE, Role.TEACHER)
   getProfile() {
     return this.websiteService.getProfile();
   }
