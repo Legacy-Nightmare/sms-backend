@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,9 +8,11 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -43,12 +46,26 @@ export class UsersController {
   }
 
   @Put(':id/active')
-  setActive(@Param('id', ParseIntPipe) id: number, @Body() dto: SetUserActiveDto) {
+  setActive(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: SetUserActiveDto,
+    @Req() req: Request,
+  ) {
+    if (!dto.isActive) this.assertNotSelf(id, req, 'deactivate');
     return this.usersService.setActive(id, dto.isActive);
   }
 
   @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    this.assertNotSelf(id, req, 'delete');
     return this.usersService.remove(id);
+  }
+
+  // F-07: an admin who deactivates/deletes their own account locks
+  // themselves out, and if they're the only admin, locks everyone out.
+  private assertNotSelf(id: number, req: Request, action: string) {
+    if ((req.user as { userId: number }).userId === id) {
+      throw new BadRequestException(`You can't ${action} your own account`);
+    }
   }
 }
