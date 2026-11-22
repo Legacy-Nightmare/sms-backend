@@ -25,7 +25,7 @@ import { StorageModule } from './platform/storage/storage.module';
     // Not applied globally — F-27 found no rate limiting at all on the
     // unauthenticated endpoints (login, public homepage, admit-card
     // lookup/download) that actually need it. Only those controllers
-    // opt in with @UseGuards(ThrottlerGuard); everything else (the
+    // opt in with @UseGuards(AppThrottlerGuard); everything else (the
     // authenticated dashboard) is unaffected.
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }]),
     StorageModule,

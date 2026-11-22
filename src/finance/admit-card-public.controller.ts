@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { AppThrottlerGuard } from '../common/guards/app-throttler.guard';
 import { StudentsService } from '../students/students.service';
 import { StudentFeesService } from './student-fees.service';
 import { AcademicsService } from '../academics/academics.service';
@@ -31,7 +32,7 @@ function toCalendarDate(value: string | null | undefined): string | null {
 // through unrefused) since class+section+roll is a small, guessable space.
 @ApiTags('public')
 @Controller('public/admit-card')
-@UseGuards(ThrottlerGuard)
+@UseGuards(AppThrottlerGuard)
 @Throttle({ default: { limit: 20, ttl: 60_000 } })
 export class AdmitCardPublicController {
   constructor(
