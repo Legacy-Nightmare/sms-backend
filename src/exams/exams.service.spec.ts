@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { ExamsService, type MarksRequester } from './exams.service';
 import { Exam, ExamType } from './entities/exam.entity';
 import { Role } from '../common/enums/role.enum';
@@ -312,5 +316,89 @@ describe('ExamsService.getCombinedResult', () => {
     await expect(
       service.getCombinedResult(10, 100, '2026', admin),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('ExamsService teacher class scope (F-08/F-32)', () => {
+  const teacher: MarksRequester = { userId: 5, role: Role.TEACHER };
+  const exam = { id: 1, classId: 10, sectionId: null } as Exam;
+
+  function build(assignedClassIds: number[]) {
+    const qb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      distinct: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getRawMany: jest
+        .fn()
+        .mockResolvedValue(assignedClassIds.map((classId) => ({ classId }))),
+    };
+    const examsQb = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([exam]),
+    };
+    const examsRepo = {
+      findOne: jest.fn().mockResolvedValue(exam),
+      createQueryBuilder: jest.fn().mockReturnValue(examsQb),
+    };
+    const studentsService = {
+      findById: jest.fn().mockResolvedValue({ id: 100, classId: 11 }),
+      findAll: jest.fn().mockResolvedValue([]),
+    };
+    const service = new ExamsService(
+      {} as never,
+      examsRepo as never,
+      {} as never,
+      { createQueryBuilder: jest.fn().mockReturnValue(qb) } as never,
+      studentsService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { findById: jest.fn().mockResolvedValue({ teacherId: 50 }) } as never,
+      {} as never,
+    );
+    return { service, examsQb };
+  }
+
+  it("refuses another class's results and by-id exam fetch", async () => {
+    const { service } = build([11]);
+    await expect(service.getResultsForExam(1, teacher)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(
+      service.getStudentResultForRequester(1, 100, teacher),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      service.findExamForRequester(1, teacher),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it("rejects a student outside the exam's class even for an assigned class", async () => {
+    const { service } = build([10]);
+    await expect(
+      service.getStudentResultForRequester(1, 100, teacher),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('limits the exam list to assigned classes, and returns nothing with none', async () => {
+    const { service, examsQb } = build([10, 12]);
+    await service.findExams(undefined, undefined, undefined, teacher);
+    expect(examsQb.andWhere).toHaveBeenCalledWith(
+      'exam.classId IN (:...classIds)',
+      { classIds: [10, 12] },
+    );
+    const none = build([]);
+    expect(
+      await none.service.findExams(undefined, undefined, undefined, teacher),
+    ).toEqual([]);
+  });
+
+  it('leaves admins unrestricted', async () => {
+    const { service, examsQb } = build([]);
+    await service.findExams(undefined, undefined, undefined, admin);
+    expect(examsQb.andWhere).not.toHaveBeenCalled();
+    await expect(service.findExamForRequester(1, admin)).resolves.toBe(exam);
   });
 });

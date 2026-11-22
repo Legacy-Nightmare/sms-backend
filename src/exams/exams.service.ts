@@ -155,17 +155,14 @@ export class ExamsService {
     }
   }
 
-  // Same reasoning as assertTeacherAssignedToSubject above, but for routes
-  // that aggregate a whole class's result (semester result, progress
-  // report) rather than one subject — a teacher may read these for any
-  // class they teach at least one subject in, not just their own subject's
-  // slice of it.
-  private async assertTeacherAssignedToClass(
+  // Class ids a teacher account teaches at least one subject in; null for
+  // every other role (no restriction). Backs both the per-class check below
+  // and the teacher-scoped exam list (F-08).
+  private async assignedClassIds(
     requester: MarksRequester,
-    classId: number,
-  ): Promise<void> {
+  ): Promise<number[] | null> {
     if (requester.role !== Role.TEACHER) {
-      return;
+      return null;
     }
     const user = await this.usersService.findById(requester.userId);
     if (!user.teacherId) {
@@ -173,15 +170,27 @@ export class ExamsService {
         'Your account is not linked to a teacher profile — ask an admin to link it under Staff accounts',
       );
     }
-    const assignment = await this.teacherClassSubjectsRepo
+    const rows = await this.teacherClassSubjectsRepo
       .createQueryBuilder('tcs')
       .innerJoin(Subject, 'cs', 'cs.id = tcs.classSubjectId')
-      .where('tcs.teacherId = :teacherId AND cs.classId = :classId', {
-        teacherId: user.teacherId,
-        classId,
-      })
-      .getOne();
-    if (!assignment) {
+      .select('cs.classId', 'classId')
+      .distinct(true)
+      .where('tcs.teacherId = :teacherId', { teacherId: user.teacherId })
+      .getRawMany<{ classId: number }>();
+    return rows.map((r) => r.classId);
+  }
+
+  // Same reasoning as assertTeacherAssignedToSubject above, but for routes
+  // that aggregate a whole class's result (semester result, progress
+  // report, per-exam results) rather than one subject — a teacher may read
+  // these for any class they teach at least one subject in, not just their
+  // own subject's slice of it.
+  private async assertTeacherAssignedToClass(
+    requester: MarksRequester,
+    classId: number,
+  ): Promise<void> {
+    const classIds = await this.assignedClassIds(requester);
+    if (classIds && !classIds.includes(classId)) {
       throw new ForbiddenException('You are not assigned to this class');
     }
   }
@@ -329,12 +338,20 @@ export class ExamsService {
   // sectionId filters inclusively: an exam explicitly scoped to that
   // section matches, and so does an "all sections" exam (sectionId null) —
   // it covers every section's students, this one included.
-  findExams(classId?: number, academicYear?: string, sectionId?: number): Promise<Exam[]> {
+  async findExams(
+    classId: number | undefined,
+    academicYear: string | undefined,
+    sectionId: number | undefined,
+    requester: MarksRequester,
+  ): Promise<Exam[]> {
+    const classIds = await this.assignedClassIds(requester);
+    if (classIds && classIds.length === 0) return [];
     const qb = this.examsRepo
       .createQueryBuilder('exam')
       .leftJoinAndSelect('exam.classEntity', 'classEntity')
       .leftJoinAndSelect('exam.section', 'section')
       .orderBy('exam.createdAt', 'DESC');
+    if (classIds) qb.andWhere('exam.classId IN (:...classIds)', { classIds });
     if (classId) qb.andWhere('exam.classId = :classId', { classId });
     if (academicYear) qb.andWhere('exam.academicYear = :academicYear', { academicYear });
     if (sectionId) {
@@ -351,6 +368,13 @@ export class ExamsService {
     if (!exam) {
       throw new NotFoundException('Exam not found');
     }
+    return exam;
+  }
+
+  // The by-id fetch the exams controller exposes — scoped like the list.
+  async findExamForRequester(id: number, requester: MarksRequester): Promise<Exam> {
+    const exam = await this.findExamById(id);
+    await this.assertTeacherAssignedToClass(requester, exam.classId);
     return exam;
   }
 
@@ -493,6 +517,24 @@ export class ExamsService {
       .sort((a, b) => a.roll - b.roll);
   }
 
+  // The single-student route the controller exposes: same class check as
+  // getResultsForExam, plus the student must belong to the exam's class —
+  // otherwise a teacher could name any student id against an exam of a
+  // class they do teach and read that student's name/code.
+  async getStudentResultForRequester(
+    examId: number,
+    studentId: number,
+    requester: MarksRequester,
+  ): Promise<StudentExamResult> {
+    const exam = await this.findExamById(examId);
+    await this.assertTeacherAssignedToClass(requester, exam.classId);
+    const student = await this.studentsService.findById(studentId);
+    if (student.classId !== exam.classId) {
+      throw new NotFoundException("Student is not in this exam's class");
+    }
+    return this.getStudentResult(examId, studentId);
+  }
+
   async getStudentResult(
     examId: number,
     studentId: number,
@@ -530,14 +572,23 @@ export class ExamsService {
     };
   }
 
-  async getResultsForExam(examId: number): Promise<StudentExamResult[]> {
+  async getResultsForExam(
+    examId: number,
+    requester: MarksRequester,
+  ): Promise<StudentExamResult[]> {
     const exam = await this.findExamById(examId);
+    await this.assertTeacherAssignedToClass(requester, exam.classId);
+    return this.resultsForExam(exam);
+  }
+
+  // Unscoped — for the admin-only publish/notify paths below.
+  private async resultsForExam(exam: Exam): Promise<StudentExamResult[]> {
     const students = await this.studentsService.findAll({
       classId: exam.classId,
       sectionId: exam.sectionId ?? undefined,
     });
     return Promise.all(
-      students.map((s) => this.getStudentResult(examId, s.id)),
+      students.map((s) => this.getStudentResult(exam.id, s.id)),
     );
   }
 
@@ -904,7 +955,7 @@ export class ExamsService {
   // want results visible before guardians are notified separately.
   async publishExam(examId: number): Promise<{ published: number }> {
     const exam = await this.findExamById(examId);
-    const results = await this.getResultsForExam(examId);
+    const results = await this.resultsForExam(exam);
     exam.publishedAt = new Date();
     await this.examsRepo.save(exam);
     return { published: results.length };
@@ -922,7 +973,7 @@ export class ExamsService {
     }>;
   }> {
     const exam = await this.findExamById(examId);
-    const results = await this.getResultsForExam(examId);
+    const results = await this.resultsForExam(exam);
     const { emailed, missingGuardianEmail } =
       await this.emailGuardiansForResults(exam.name, results);
     exam.emailedCount = emailed;
@@ -941,7 +992,7 @@ export class ExamsService {
     }>;
   }> {
     const exam = await this.findExamById(examId);
-    const results = await this.getResultsForExam(examId);
+    const results = await this.resultsForExam(exam);
     const { emailed, missingGuardianEmail } =
       await this.emailGuardiansForResults(exam.name, results);
     exam.publishedAt = new Date();

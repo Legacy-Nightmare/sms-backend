@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Student } from './entities/student.entity';
 import { Guardian, GuardianRelation } from './entities/guardian.entity';
 import { AcademicsService } from '../academics/academics.service';
@@ -58,9 +58,12 @@ export class StudentsService {
   findAll(filters: {
     classId?: number;
     sectionId?: number;
+    // Restricts to these classes (a teacher's assignments) on top of classId.
+    classIds?: number[];
   }): Promise<Student[]> {
     return this.studentsRepo.find({
       where: {
+        ...(filters.classIds ? { classId: In(filters.classIds) } : {}),
         ...(filters.classId ? { classId: filters.classId } : {}),
         ...(filters.sectionId ? { sectionId: filters.sectionId } : {}),
       },

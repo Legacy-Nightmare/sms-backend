@@ -63,6 +63,11 @@ export class TeachersService {
     return Object.assign(teacher, { assignments });
   }
 
+  async classIdsForTeacher(teacherId: number): Promise<number[]> {
+    const rows = await this.fetchAssignmentRows(teacherId);
+    return [...new Set(rows.map((r) => r.classId))];
+  }
+
   private async fetchAssignmentRows(
     teacherId?: number,
   ): Promise<Array<TeacherAssignment & { teacherId: number }>> {

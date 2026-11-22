@@ -87,20 +87,22 @@ export class ExamsController {
 
   @Get('exams')
   findExams(
-    @Query('classId') classId?: string,
-    @Query('academicYear') academicYear?: string,
-    @Query('sectionId') sectionId?: string,
+    @Query('classId') classId: string | undefined,
+    @Query('academicYear') academicYear: string | undefined,
+    @Query('sectionId') sectionId: string | undefined,
+    @Req() req: Request,
   ) {
     return this.examsService.findExams(
       classId ? parseInt(classId, 10) : undefined,
       academicYear,
       sectionId ? parseInt(sectionId, 10) : undefined,
+      req.user as MarksRequester,
     );
   }
 
   @Get('exams/:id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.examsService.findExamById(id);
+  findOne(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    return this.examsService.findExamForRequester(id, req.user as MarksRequester);
   }
 
   @Post('exams/:id/marks')
@@ -128,16 +130,21 @@ export class ExamsController {
   }
 
   @Get('exams/:id/results')
-  getResults(@Param('id', ParseIntPipe) examId: number) {
-    return this.examsService.getResultsForExam(examId);
+  getResults(@Param('id', ParseIntPipe) examId: number, @Req() req: Request) {
+    return this.examsService.getResultsForExam(examId, req.user as MarksRequester);
   }
 
   @Get('exams/:id/results/:studentId')
   getStudentResult(
     @Param('id', ParseIntPipe) examId: number,
     @Param('studentId', ParseIntPipe) studentId: number,
+    @Req() req: Request,
   ) {
-    return this.examsService.getStudentResult(examId, studentId);
+    return this.examsService.getStudentResultForRequester(
+      examId,
+      studentId,
+      req.user as MarksRequester,
+    );
   }
 
   @Get('classes/:classId/students/:studentId/semester-result')

@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   NotFoundException,
   Param,
@@ -10,15 +11,18 @@ import {
   Post,
   Put,
   Query,
+  Req,
   Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { StudentsService } from './students.service';
+import { TeachersService } from '../teachers/teachers.service';
+import { UsersService } from '../users/users.service';
 import { CreateStudentDto } from './dto/create-student.dto';
 import { UpdateStudentDto } from './dto/update-student.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -40,7 +44,30 @@ export class StudentsController {
   constructor(
     private readonly studentsService: StudentsService,
     private readonly storage: StorageService,
+    private readonly teachersService: TeachersService,
+    private readonly usersService: UsersService,
   ) {}
+
+  // F-08: a teacher account only sees students of classes it is assigned to
+  // (teacher_class_subjects); every other role is unrestricted (null).
+  private async teacherClassIds(req: Request): Promise<number[] | null> {
+    const { userId, role } = req.user as { userId: number; role: Role };
+    if (role !== Role.TEACHER) return null;
+    const { teacherId } = await this.usersService.findById(userId);
+    if (!teacherId) {
+      throw new ForbiddenException(
+        'Your account is not linked to a teacher profile — ask an admin to link it under Staff accounts',
+      );
+    }
+    return this.teachersService.classIdsForTeacher(teacherId);
+  }
+
+  private async assertCanSee(studentClassId: number, req: Request) {
+    const classIds = await this.teacherClassIds(req);
+    if (classIds && !classIds.includes(studentClassId)) {
+      throw new ForbiddenException("You are not assigned to this student's class");
+    }
+  }
 
   @Post()
   @Roles(Role.ADMIN)
@@ -49,19 +76,28 @@ export class StudentsController {
   }
 
   @Get()
-  findAll(
-    @Query('classId') classId?: string,
-    @Query('sectionId') sectionId?: string,
+  async findAll(
+    @Query('classId') classId: string | undefined,
+    @Query('sectionId') sectionId: string | undefined,
+    @Req() req: Request,
   ) {
+    const classIds = await this.teacherClassIds(req);
+    const wantedClassId = classId ? parseInt(classId, 10) : undefined;
+    if (classIds && wantedClassId && !classIds.includes(wantedClassId)) {
+      return [];
+    }
     return this.studentsService.findAll({
-      classId: classId ? parseInt(classId, 10) : undefined,
+      classId: wantedClassId,
       sectionId: sectionId ? parseInt(sectionId, 10) : undefined,
+      ...(classIds ? { classIds } : {}),
     });
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.studentsService.findById(id);
+  async findOne(@Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const student = await this.studentsService.findById(id);
+    await this.assertCanSee(student.classId, req);
+    return student;
   }
 
   // Streams the student's photo through this server instead of the browser
@@ -71,8 +107,13 @@ export class StudentsController {
   // a CORS error. A server-to-server fetch isn't subject to CORS at all, and
   // this server already sends its own CORS headers on every response.
   @Get(':id/photo')
-  async getPhoto(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+  async getPhoto(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
     const student = await this.studentsService.findById(id);
+    await this.assertCanSee(student.classId, req);
     if (!student.photoUrl) {
       throw new NotFoundException('This student has no photo');
     }
